@@ -682,13 +682,18 @@ async function classifyCandidates(
     }
 
     if (matchedCategoryId) {
-      updates.push({
+      const update = {
         id: candidate.trans.id,
         category: matchedCategoryId,
         categorization_source: 'ai',
         categorization_date: currentDay(),
         categorization_note: 'Classified based on previous user correction',
-      });
+      } satisfies (typeof updates)[number];
+      candidate.trans.category = update.category;
+      candidate.trans.categorization_source = update.categorization_source;
+      candidate.trans.categorization_date = update.categorization_date;
+      candidate.trans.categorization_note = update.categorization_note;
+      updates.push(update);
     } else {
       llmCandidates.push(candidate);
     }
@@ -723,13 +728,18 @@ async function classifyCandidates(
       const id = start + index + 1;
       const result = results.get(id);
       if (result && !candidate.trans.category) {
-        updates.push({
+        const update = {
           id: candidate.trans.id,
           category: result.categoryId,
           categorization_source: 'ai',
           categorization_date: currentDay(),
           categorization_note: result.reason,
-        });
+        } satisfies (typeof updates)[number];
+        candidate.trans.category = update.category;
+        candidate.trans.categorization_source = update.categorization_source;
+        candidate.trans.categorization_date = update.categorization_date;
+        candidate.trans.categorization_note = update.categorization_note;
+        updates.push(update);
       }
     });
   }

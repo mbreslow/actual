@@ -78,7 +78,10 @@ import {
   replaceModal,
 } from '#modals/modalsSlice';
 import type { ConfirmTransactionEditReason } from '#modals/modalsSlice';
-import { addNotification } from '#notifications/notificationsSlice';
+import {
+  addNotification,
+  removeNotification,
+} from '#notifications/notificationsSlice';
 import { useCreatePayeeMutation } from '#payees';
 import * as queries from '#queries';
 import { aqlQuery } from '#queries/aqlQuery';
@@ -781,12 +784,28 @@ class AccountInternal extends PureComponent<
   };
 
   onAutoClassify = async (ids?: string[]) => {
+    const notificationId = 'llm-auto-classify-progress';
     try {
       this.setState({
         workingHard: true,
         autoClassifying: true,
         recentClassifications: [],
       });
+      this.props.dispatch(
+        addNotification({
+          notification: {
+            id: notificationId,
+            type: 'message',
+            sticky: true,
+            message:
+              ids && ids.length > 0
+                ? t('Auto-classifying {{count}} selected transactions...', {
+                    count: ids.length,
+                  })
+                : t('Auto-classifying uncategorized transactions...'),
+          },
+        }),
+      );
 
       let idsToClassify = ids && ids.length > 0 ? ids : [];
       if (idsToClassify.length === 0) {
@@ -795,6 +814,7 @@ class AccountInternal extends PureComponent<
           .map(t => t.id);
       }
 
+      let classified = 0;
       for (const id of idsToClassify) {
         const trans = this.state.transactions.find(t => t.id === id);
         this.setState(state => ({
@@ -811,6 +831,7 @@ class AccountInternal extends PureComponent<
 
           if (res && res.updates && res.updates.length > 0) {
             const update = res.updates[0];
+            classified += 1;
 
             const payee = trans
               ? this.props.payees.find(p => p.id === trans.payee)
@@ -909,8 +930,23 @@ class AccountInternal extends PureComponent<
       }
 
       this.fetchTransactions(this.state.filterConditions);
+      this.props.dispatch(removeNotification({ id: notificationId }));
+      this.props.dispatch(
+        addNotification({
+          notification: {
+            type: 'message',
+            message:
+              classified === 1
+                ? t('Auto-classified 1 transaction.')
+                : t('Auto-classified {{count}} transactions.', {
+                    count: classified,
+                  }),
+          },
+        }),
+      );
     } catch (error) {
       console.error('Error auto-classifying transactions:', error);
+      this.props.dispatch(removeNotification({ id: notificationId }));
       this.props.dispatch(
         addNotification({
           notification: {

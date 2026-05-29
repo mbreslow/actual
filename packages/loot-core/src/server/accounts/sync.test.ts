@@ -83,7 +83,7 @@ describe('Account sync', () => {
       .mockResolvedValue(new Response('{}'));
     const { id: acctId } = await prepareDatabase();
 
-    await asyncStorage.setItem('llmClassificationConfig', {
+    vi.mocked(asyncStorage.getItem).mockResolvedValue({
       provider: 'ollama',
       model: 'test-model',
     });
@@ -120,7 +120,7 @@ describe('Account sync', () => {
       id: 'llmClassificationEnabled' satisfies keyof SyncedPrefs,
       value: 'true',
     });
-    await asyncStorage.setItem('llmClassificationConfig', {
+    vi.mocked(asyncStorage.getItem).mockResolvedValue({
       provider: 'ollama',
       model: 'test-model',
     });
@@ -171,7 +171,7 @@ describe('Account sync', () => {
       id: 'llmClassificationEnabled' satisfies keyof SyncedPrefs,
       value: 'true',
     });
-    await asyncStorage.setItem('llmClassificationConfig', {
+    vi.mocked(asyncStorage.getItem).mockResolvedValue({
       provider: 'ollama',
       model: 'test-model',
     });

@@ -177,36 +177,43 @@ const llmProviderOptions: Array<[LLMClassificationProvider, string]> = [
   ['openai', 'OpenAI'],
   ['anthropic', 'Anthropic'],
   ['google', 'Google Gemini'],
+  ['googleVertex', 'Google Vertex AI'],
+  ['amazonBedrock', 'Amazon Bedrock'],
 ];
 
 const llmProviderDefaults = {
   ollama: {
+    model: 'llama3.1',
     endpoint: 'http://127.0.0.1:11434/api/chat',
   },
   openai: {
+    model: 'gpt-4o-mini',
     endpoint: 'https://api.openai.com/v1/chat/completions',
   },
   anthropic: {
+    model: 'claude-3-5-haiku-latest',
     endpoint: 'https://api.anthropic.com/v1/messages',
   },
   google: {
+    model: 'gemini-2.5-flash',
     endpoint: 'https://generativelanguage.googleapis.com/v1beta',
   },
   googleVertex: {
+    model: 'gemini-2.5-flash',
     endpoint: 'https://aiplatform.googleapis.com/v1',
   },
   amazonBedrock: {
+    model: 'us.anthropic.claude-sonnet-4-6',
     endpoint: 'https://bedrock-runtime.{region}.amazonaws.com',
   },
 } satisfies Record<
   LLMClassificationProvider,
-  Pick<LLMClassificationConfig, 'endpoint'>
+  Pick<LLMClassificationConfig, 'model' | 'endpoint'>
 >;
 
 const defaultLLMConfig = {
   provider: 'ollama',
   ...llmProviderDefaults.ollama,
-  model: '',
   timeoutMs: 180000,
   batchSize: 12,
 } satisfies LLMClassificationConfig;
