@@ -35,6 +35,7 @@ import type {
   TransactionEntity,
 } from '#types/models';
 
+import { classifyBankSyncTransactions } from './llm-classifier';
 import { getStartingBalancePayee } from './payees';
 import { title } from './title';
 
@@ -622,6 +623,10 @@ export async function reconcileTransactions(
     reimportDeleted,
   );
 
+  if (isBankSyncAccount && !isPreview) {
+    await classifyBankSyncTransactions(acctId, transactionsStep3);
+  }
+
   // Finally, generate & commit the changes
   for (const { trans, subtransactions, match } of transactionsStep3) {
     if (match && !trans.forceAddTransaction) {
@@ -733,7 +738,12 @@ export async function reconcileTransactions(
 
   if (!isPreview) {
     await createNewPayees(payeesToCreate, [...added, ...updated]);
-    await batchUpdateTransactions({ added, updated });
+    await batchUpdateTransactions({
+      added,
+      updated,
+      categorizationDefaultSource: 'imported',
+      categorizationDefaultNote: 'Bank sync import',
+    });
   }
 
   logger.log('Debug data for the operations:', {
@@ -1010,12 +1020,28 @@ export async function addTransactions(
       added,
       learnCategories,
       runTransfers,
+      categorizationDefaultSource: 'imported',
+      categorizationDefaultNote: 'CSV import',
     });
     newTransactions = res.added.map(t => t.id);
   } else {
     await batchMessages(async () => {
       newTransactions = await Promise.all(
-        added.map(async trans => db.insertTransaction(trans)),
+        added.map(async trans =>
+          db.insertTransaction(
+            trans.category
+              ? {
+                  ...trans,
+                  categorization_source:
+                    trans.categorization_source ?? 'imported',
+                  categorization_date:
+                    trans.categorization_date ?? monthUtils.currentDay(),
+                  categorization_note:
+                    trans.categorization_note ?? 'CSV import',
+                }
+              : trans,
+          ),
+        ),
       );
     });
   }

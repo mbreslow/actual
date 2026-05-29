@@ -13,6 +13,26 @@ export type FeatureFlag =
   | 'sankeyReport'
   | 'akahuBankSync';
 
+export type LLMClassificationProvider =
+  | 'ollama'
+  | 'openai'
+  | 'anthropic'
+  | 'google'
+  | 'googleVertex'
+  | 'amazonBedrock';
+
+export type LLMClassificationConfig = Partial<{
+  provider: LLMClassificationProvider;
+  model: string;
+  endpoint: string;
+  apiKey: string;
+  timeoutMs: number;
+  batchSize: number;
+  vertexProjectId: string;
+  vertexLocation: string;
+  bedrockRegion: string;
+}>;
+
 /**
  * Cross-device preferences. These sync across devices when they are changed.
  */
@@ -32,6 +52,7 @@ export type SyncedPrefs = Partial<
     | `side-nav.show-balance-history-${string}`
     | `show-balances-${string}`
     | `show-extra-balances-${string}`
+    | `show-categorization-details-${string}`
     | `hide-cleared-${string}`
     | `hide-reconciled-${string}`
     // TODO: pull from src/components/modals/ImportTransactions.js
@@ -49,6 +70,7 @@ export type SyncedPrefs = Partial<
     | `sync-reimport-deleted-${string}`
     | `sync-import-notes-${string}`
     | `sync-import-transactions-${string}`
+    | `sync-llm-classify-${string}`
     | `sync-update-dates-${string}`
     | `ofx-fallback-missing-payee-${string}`
     | `ofx-swap-payee-memo-${string}`
@@ -132,6 +154,7 @@ export type GlobalPrefs = Partial<{
     port?: number;
   };
   notifyWhenUpdateIsAvailable: boolean;
+  llmClassificationConfig: LLMClassificationConfig;
 }>;
 
 // GlobalPrefsJson represents what's saved in the global-store.json file
@@ -160,6 +183,7 @@ export type GlobalPrefsJson = Partial<{
   'server-self-signed-cert'?: GlobalPrefs['serverSelfSignedCert'];
   syncServerConfig?: GlobalPrefs['syncServerConfig'];
   notifyWhenUpdateIsAvailable?: GlobalPrefs['notifyWhenUpdateIsAvailable'];
+  llmClassificationConfig?: GlobalPrefs['llmClassificationConfig'];
 }>;
 
 export type AuthMethods = 'password' | 'openid';

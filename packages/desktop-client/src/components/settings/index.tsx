@@ -1,16 +1,21 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 
 import { Button } from '@actual-app/components/button';
 import { useResponsive } from '@actual-app/components/hooks/useResponsive';
 import { Input } from '@actual-app/components/input';
+import { Select } from '@actual-app/components/select';
 import { Text } from '@actual-app/components/text';
 import { theme } from '@actual-app/components/theme';
 import { tokens } from '@actual-app/components/tokens';
 import { View } from '@actual-app/components/view';
 import { listen } from '@actual-app/core/platform/client/connection';
 import { isElectron } from '@actual-app/core/shared/environment';
+import type {
+  LLMClassificationConfig,
+  LLMClassificationProvider,
+} from '@actual-app/core/types/prefs';
 import { css } from '@emotion/css';
 
 import { getLatestAppVersion } from '#app/appSlice';
@@ -166,6 +171,242 @@ function AdvancedAbout() {
   );
 }
 
+const llmProviderOptions: Array<[LLMClassificationProvider, string]> = [
+  ['ollama', 'Ollama'],
+  ['openai', 'OpenAI'],
+  ['anthropic', 'Anthropic'],
+  ['google', 'Google Gemini'],
+  ['googleVertex', 'Google Vertex AI'],
+  ['amazonBedrock', 'Amazon Bedrock'],
+];
+
+const llmProviderDefaults = {
+  ollama: {
+    model: 'llama3.1',
+    endpoint: 'http://127.0.0.1:11434/api/chat',
+  },
+  openai: {
+    model: 'gpt-4o-mini',
+    endpoint: 'https://api.openai.com/v1/chat/completions',
+  },
+  anthropic: {
+    model: 'claude-3-5-haiku-latest',
+    endpoint: 'https://api.anthropic.com/v1/messages',
+  },
+  google: {
+    model: 'gemini-2.5-flash',
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta',
+  },
+  googleVertex: {
+    model: 'gemini-2.5-flash',
+    endpoint: 'https://aiplatform.googleapis.com/v1',
+  },
+  amazonBedrock: {
+    model: 'us.anthropic.claude-sonnet-4-6',
+    endpoint: 'https://bedrock-runtime.{region}.amazonaws.com',
+  },
+} satisfies Record<
+  LLMClassificationProvider,
+  Pick<LLMClassificationConfig, 'model' | 'endpoint'>
+>;
+
+const defaultLLMConfig = {
+  provider: 'ollama',
+  ...llmProviderDefaults.ollama,
+  timeoutMs: 180000,
+  batchSize: 12,
+} satisfies LLMClassificationConfig;
+
+function LLMClassificationSettings() {
+  const { t } = useTranslation();
+  const [savedConfig, setSavedConfig] = useGlobalPref(
+    'llmClassificationConfig',
+  );
+  const [config, setConfig] =
+    useState<LLMClassificationConfig>(defaultLLMConfig);
+
+  useEffect(() => {
+    setConfig({ ...defaultLLMConfig, ...savedConfig });
+  }, [savedConfig]);
+
+  const updateConfig = <Key extends keyof LLMClassificationConfig>(
+    key: Key,
+    value: LLMClassificationConfig[Key],
+  ) => {
+    setConfig(current => ({ ...current, [key]: value }));
+  };
+
+  const saveConfig = () => {
+    setSavedConfig({
+      ...config,
+      timeoutMs: Number(config.timeoutMs) || defaultLLMConfig.timeoutMs,
+      batchSize: Number(config.batchSize) || defaultLLMConfig.batchSize,
+    });
+  };
+
+  const provider = config.provider || 'ollama';
+  const requiresApiKey = provider !== 'ollama';
+  const updateProvider = (value: LLMClassificationProvider) => {
+    setConfig(current => ({
+      ...current,
+      ...llmProviderDefaults[value],
+      provider: value,
+    }));
+  };
+
+  return (
+    <Setting>
+      <Text>
+        <Trans>
+          <strong>LLM transaction categorization</strong> configures the local
+          model provider used by bank sync account settings. Transactions are
+          only sent when the option is enabled for an individual bank account.
+        </Trans>
+      </Text>
+      <View style={{ gap: 10, width: '100%' }}>
+        <FormField>
+          <FormLabel title={t('Provider')} htmlFor="settings-llmProvider" />
+          <Select
+            id="settings-llmProvider"
+            options={llmProviderOptions}
+            value={provider}
+            onChange={updateProvider}
+            style={{ width: '100%' }}
+          />
+        </FormField>
+        <FormField>
+          <FormLabel title={t('Model')} htmlFor="settings-llmModel" />
+          <Input
+            id="settings-llmModel"
+            value={config.model || ''}
+            onChangeValue={value => updateConfig('model', value)}
+            placeholder={t('Model name')}
+            style={{ width: '100%' }}
+          />
+        </FormField>
+        <FormField>
+          <FormLabel
+            title={t('Endpoint or base URL')}
+            htmlFor="settings-llmEndpoint"
+          />
+          <Input
+            id="settings-llmEndpoint"
+            value={config.endpoint || ''}
+            onChangeValue={value => updateConfig('endpoint', value)}
+            placeholder={t('Provider default')}
+            style={{ width: '100%' }}
+          />
+        </FormField>
+        {requiresApiKey && (
+          <FormField>
+            <FormLabel title={t('API key')} htmlFor="settings-llmApiKey" />
+            <Input
+              id="settings-llmApiKey"
+              type="password"
+              value={config.apiKey || ''}
+              onChangeValue={value => updateConfig('apiKey', value)}
+              placeholder={t('Required for this provider')}
+              style={{ width: '100%' }}
+            />
+          </FormField>
+        )}
+        {provider === 'googleVertex' && (
+          <>
+            <FormField>
+              <FormLabel
+                title={t('Vertex project ID')}
+                htmlFor="settings-llmVertexProject"
+              />
+              <Input
+                id="settings-llmVertexProject"
+                value={config.vertexProjectId || ''}
+                onChangeValue={value => updateConfig('vertexProjectId', value)}
+                style={{ width: '100%' }}
+              />
+            </FormField>
+            <FormField>
+              <FormLabel
+                title={t('Vertex location')}
+                htmlFor="settings-llmVertexLocation"
+              />
+              <Input
+                id="settings-llmVertexLocation"
+                value={config.vertexLocation || ''}
+                onChangeValue={value => updateConfig('vertexLocation', value)}
+                placeholder="us-central1"
+                style={{ width: '100%' }}
+              />
+            </FormField>
+          </>
+        )}
+        {provider === 'amazonBedrock' && (
+          <FormField>
+            <FormLabel
+              title={t('Bedrock region')}
+              htmlFor="settings-llmBedrockRegion"
+            />
+            <Input
+              id="settings-llmBedrockRegion"
+              value={config.bedrockRegion || ''}
+              onChangeValue={value => updateConfig('bedrockRegion', value)}
+              placeholder="us-east-1"
+              style={{ width: '100%' }}
+            />
+          </FormField>
+        )}
+        <View
+          style={{
+            flexDirection: 'row',
+            gap: 10,
+          }}
+        >
+          <FormField style={{ flex: 1 }}>
+            <FormLabel
+              title={t('Timeout (seconds)')}
+              htmlFor="settings-llmTimeout"
+            />
+            <Input
+              id="settings-llmTimeout"
+              type="number"
+              min={1}
+              value={String(
+                Math.round(
+                  (config.timeoutMs || defaultLLMConfig.timeoutMs) / 1000,
+                ),
+              )}
+              onChangeValue={value =>
+                updateConfig('timeoutMs', Number(value) * 1000)
+              }
+              style={{ width: '100%' }}
+            />
+          </FormField>
+          <FormField style={{ flex: 1 }}>
+            <FormLabel title={t('Batch size')} htmlFor="settings-llmBatch" />
+            <Input
+              id="settings-llmBatch"
+              type="number"
+              min={1}
+              max={50}
+              value={String(config.batchSize || defaultLLMConfig.batchSize)}
+              onChangeValue={value => updateConfig('batchSize', Number(value))}
+              style={{ width: '100%' }}
+            />
+          </FormField>
+        </View>
+        <Text style={{ color: theme.pageTextSubdued }}>
+          <Trans>
+            API keys are stored on this device and are not synced with the
+            budget file.
+          </Trans>
+        </Text>
+        <Button variant="primary" onPress={saveConfig}>
+          <Trans>Save LLM settings</Trans>
+        </Button>
+      </View>
+    </Setting>
+  );
+}
+
 export function Settings() {
   const { t } = useTranslation();
   const [floatingSidebar] = useGlobalPref('floatingSidebar');
@@ -248,6 +489,7 @@ export function Settings() {
         <ExportBudget />
         <AdvancedToggle>
           <AdvancedAbout />
+          <LLMClassificationSettings />
           <ResetCache />
           <ResetSync />
           <RepairTransactions />

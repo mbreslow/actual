@@ -361,6 +361,7 @@ export async function runRules(
   );
 
   for (let i = 0; i < rules.length; i++) {
+    const previousCategory = finalTrans.category;
     // If there is a scheduleRuleID (meaning this transaction came from a schedule) then exclude rules linked to other schedules.
     if (scheduleRuleID !== '') {
       if (rules[i].id === scheduleRuleID) {
@@ -377,6 +378,18 @@ export async function runRules(
     } else {
       // if there is no scheduleRuleID then just run all rules.
       finalTrans = rules[i].apply(finalTrans);
+    }
+
+    if (finalTrans.category !== previousCategory) {
+      if (finalTrans.category) {
+        finalTrans.categorization_source = 'rule';
+        finalTrans.categorization_date = currentDay();
+        finalTrans.categorization_note = rules[i].id || '';
+      } else {
+        finalTrans.categorization_source = null;
+        finalTrans.categorization_date = null;
+        finalTrans.categorization_note = null;
+      }
     }
   }
 

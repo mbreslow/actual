@@ -125,6 +125,12 @@ async function saveGlobalPrefs(prefs: GlobalPrefs) {
       prefs.notifyWhenUpdateIsAvailable,
     );
   }
+  if (prefs.llmClassificationConfig !== undefined) {
+    await asyncStorage.setItem(
+      'llmClassificationConfig',
+      prefs.llmClassificationConfig,
+    );
+  }
   return 'ok';
 }
 
@@ -144,6 +150,7 @@ async function loadGlobalPrefs(): Promise<GlobalPrefs> {
     'server-self-signed-cert': serverSelfSignedCert,
     syncServerConfig,
     notifyWhenUpdateIsAvailable,
+    llmClassificationConfig,
   } = await asyncStorage.multiGet([
     'floating-sidebar',
     'category-expanded-state',
@@ -159,6 +166,7 @@ async function loadGlobalPrefs(): Promise<GlobalPrefs> {
     'server-self-signed-cert',
     'syncServerConfig',
     'notifyWhenUpdateIsAvailable',
+    'llmClassificationConfig',
   ] as const);
   return {
     floatingSidebar: floatingSidebar === 'true',
@@ -187,6 +195,7 @@ async function loadGlobalPrefs(): Promise<GlobalPrefs> {
       notifyWhenUpdateIsAvailable === undefined
         ? true
         : notifyWhenUpdateIsAvailable, // default to true
+    llmClassificationConfig: llmClassificationConfig || undefined,
   };
 }
 

@@ -9,6 +9,7 @@ import { AnimatedLoading } from '@actual-app/components/icons/AnimatedLoading';
 import {
   SvgAdd,
   SvgDotsHorizontalTriple,
+  SvgTag,
 } from '@actual-app/components/icons/v1';
 import {
   SvgArrowsExpand3,
@@ -46,6 +47,7 @@ import { SelectedTransactionsButton } from '#components/transactions/SelectedTra
 import { useDateFormat } from '#hooks/useDateFormat';
 import { useLocale } from '#hooks/useLocale';
 import { useLocalPref } from '#hooks/useLocalPref';
+import { useSelectedItems } from '#hooks/useSelected';
 import { useSplitsExpanded } from '#hooks/useSplitsExpanded';
 import { useSyncedPref } from '#hooks/useSyncedPref';
 import { useSyncServerStatus } from '#hooks/useSyncServerStatus';
@@ -59,6 +61,7 @@ type AccountHeaderProps = {
   tableRef: TableRef;
   isNameEditable: boolean;
   workingHard: boolean;
+  autoClassifying: boolean;
   accountName: string;
   accountId?: string;
   account?: AccountEntity;
@@ -70,6 +73,7 @@ type AccountHeaderProps = {
   showBalances: boolean;
   showExtraBalances: boolean;
   showCleared: boolean;
+  showCategorizationDetails: boolean;
   showReconciled: boolean;
   showEmptyMessage: boolean;
   balanceQuery: ComponentProps<typeof ReconcilingMessage>['balanceQuery'];
@@ -97,6 +101,7 @@ type AccountHeaderProps = {
   saveNameError: AccountNameFieldProps['saveNameError'];
   onSync: () => void;
   onImport: () => void;
+  onAutoClassify: (ids?: string[]) => void;
   onMenuSelect: AccountMenuProps['onMenuSelect'];
   onReconcile: ComponentProps<typeof ReconcileMenu>['onReconcile'];
   onBatchEdit: ComponentProps<typeof SelectedTransactionsButton>['onEdit'];
@@ -134,6 +139,7 @@ export function AccountHeader({
   tableRef,
   isNameEditable,
   workingHard,
+  autoClassifying,
   accountName,
   accountId,
   account,
@@ -145,6 +151,7 @@ export function AccountHeader({
   showBalances,
   showExtraBalances,
   showCleared,
+  showCategorizationDetails,
   showReconciled,
   showEmptyMessage,
   balanceQuery,
@@ -166,6 +173,7 @@ export function AccountHeader({
   saveNameError,
   onSync,
   onImport,
+  onAutoClassify,
   onMenuSelect,
   onReconcile,
   onBatchDelete,
@@ -197,6 +205,7 @@ export function AccountHeader({
   const isUsingServer = syncServerStatus !== 'no-server';
   const isServerOffline = syncServerStatus === 'offline';
   const [_, setExpandSplitsPref] = useLocalPref('expand-splits');
+  const selectedItems = useSelectedItems();
   const [showNetWorthChartPref, _setShowNetWorthChartPref] = useSyncedPref(
     `show-account-${accountId}-net-worth-chart`,
   );
@@ -213,6 +222,9 @@ export function AccountHeader({
 
   // Only show the ability to make linked transfers on multi-account views.
   const showMakeTransfer = !account;
+  const selectedTransactionIds = [...(selectedItems ?? [])].filter(
+    id => !id.includes('preview/'),
+  );
 
   function onToggleSplits() {
     if (tableRef.current) {
@@ -366,6 +378,37 @@ export function AccountHeader({
             </Button>
           )}
 
+          {accountId === 'uncategorized' && (
+            <Button
+              variant="bare"
+              onPress={() => onAutoClassify(selectedTransactionIds)}
+              isDisabled={workingHard}
+            >
+              {autoClassifying ? (
+                <AnimatedLoading
+                  width={13}
+                  height={13}
+                  style={{ marginRight: 4 }}
+                />
+              ) : (
+                <SvgTag width={13} height={13} style={{ marginRight: 4 }} />
+              )}
+              {autoClassifying ? (
+                <Trans>Classifying...</Trans>
+              ) : selectedTransactionIds.length > 0 ? (
+                <Trans>
+                  Auto-classify selected (
+                  {{
+                    count: selectedTransactionIds.length,
+                  }}
+                  )
+                </Trans>
+              ) : (
+                <Trans>Auto-classify</Trans>
+              )}
+            </Button>
+          )}
+
           {!showEmptyMessage && (
             <Button variant="bare" onPress={onAddTransaction}>
               <SvgAdd width={10} height={10} style={{ marginRight: 3 }} />
@@ -515,6 +558,7 @@ export function AccountHeader({
                       isSorted={isSorted}
                       showBalances={showBalances}
                       showCleared={showCleared}
+                      showCategorizationDetails={showCategorizationDetails}
                       showReconciled={showReconciled}
                       onMenuSelect={onMenuSelect}
                     />
@@ -730,6 +774,7 @@ type AccountMenuProps = {
   showBalances: boolean;
   canShowBalances: boolean;
   showCleared: boolean;
+  showCategorizationDetails: boolean;
   showReconciled: boolean;
   isSorted: boolean;
   onMenuSelect: (
@@ -740,6 +785,7 @@ type AccountMenuProps = {
       | 'reopen'
       | 'export'
       | 'toggle-balance'
+      | 'toggle-categorization-details'
       | 'remove-sorting'
       | 'toggle-cleared'
       | 'toggle-reconciled'
@@ -754,6 +800,7 @@ function AccountMenu({
   showBalances,
   canShowBalances,
   showCleared,
+  showCategorizationDetails,
   showReconciled,
   isSorted,
   onMenuSelect,
@@ -797,6 +844,12 @@ function AccountMenu({
           text: showCleared
             ? t('Hide "cleared" checkboxes')
             : t('Show "cleared" checkboxes'),
+        },
+        {
+          name: 'toggle-categorization-details',
+          text: showCategorizationDetails
+            ? t('Hide categorization details')
+            : t('Show categorization details'),
         },
         {
           name: 'toggle-reconciled',

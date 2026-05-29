@@ -32,6 +32,10 @@ export function useBankSyncAccountSettings(accountId: string) {
   const [savedImportTransactions = true, setSavedImportTransactions] =
     useSyncedPref(`sync-import-transactions-${accountId}`);
 
+  const [savedClassifyWithLLM = false, setSavedClassifyWithLLM] = useSyncedPref(
+    `sync-llm-classify-${accountId}`,
+  );
+
   const [savedUpdateDates = false, setSavedUpdateDates] = useSyncedPref(
     `sync-update-dates-${accountId}`,
   );
@@ -55,6 +59,9 @@ export function useBankSyncAccountSettings(accountId: string) {
   );
   const [updateDates, setUpdateDates] = useState(
     String(savedUpdateDates) === 'true',
+  );
+  const [classifyWithLLM, setClassifyWithLLM] = useState(
+    String(savedClassifyWithLLM) === 'true',
   );
 
   const transactionQuery = q('transactions')
@@ -92,6 +99,7 @@ export function useBankSyncAccountSettings(accountId: string) {
     setSavedReimportDeleted(String(reimportDeleted));
     setSavedImportTransactions(String(importTransactions));
     setSavedUpdateDates(String(updateDates));
+    setSavedClassifyWithLLM(String(classifyWithLLM));
   };
 
   const setMapping = (field: string, value: string) => {
@@ -120,6 +128,8 @@ export function useBankSyncAccountSettings(accountId: string) {
     setImportTransactions,
     updateDates,
     setUpdateDates,
+    classifyWithLLM,
+    setClassifyWithLLM,
     mappings,
     setMapping,
     exampleTransaction,

@@ -159,6 +159,8 @@ export function EditSyncAccount({ account }: EditSyncAccountProps) {
     setImportTransactions,
     updateDates,
     setUpdateDates,
+    classifyWithLLM,
+    setClassifyWithLLM,
     mappings,
     setMapping,
     fields,
@@ -240,6 +242,8 @@ export function EditSyncAccount({ account }: EditSyncAccountProps) {
             setImportTransactions={setImportTransactions}
             updateDates={updateDates}
             setUpdateDates={setUpdateDates}
+            classifyWithLLM={classifyWithLLM}
+            setClassifyWithLLM={setClassifyWithLLM}
             helpMode="desktop"
           />
 

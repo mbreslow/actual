@@ -155,6 +155,8 @@ type BankSyncCheckboxOptionsProps = {
   setImportTransactions: (value: boolean) => void;
   updateDates: boolean;
   setUpdateDates: (value: boolean) => void;
+  classifyWithLLM: boolean;
+  setClassifyWithLLM: (value: boolean) => void;
   helpMode?: 'desktop' | 'mobile';
 };
 
@@ -169,6 +171,8 @@ export function BankSyncCheckboxOptions({
   setImportTransactions,
   updateDates,
   setUpdateDates,
+  classifyWithLLM,
+  setClassifyWithLLM,
   helpMode = 'desktop',
 }: BankSyncCheckboxOptionsProps) {
   const { t } = useTranslation();
@@ -219,6 +223,19 @@ export function BankSyncCheckboxOptions({
         helpMode={helpMode}
       >
         <Trans>Update Dates</Trans>
+      </CheckboxOptionWithHelp>
+
+      <CheckboxOptionWithHelp
+        id="form_llm_classify"
+        checked={classifyWithLLM}
+        onChange={() => setClassifyWithLLM(!classifyWithLLM)}
+        disabled={!importTransactions}
+        helpText={t(
+          'When enabled, new uncategorized bank transactions are sent to your configured LLM provider and assigned one of your existing categories. Existing categories are never overwritten.',
+        )}
+        helpMode={helpMode}
+      >
+        <Trans>Auto-classify uncategorized transactions with LLM</Trans>
       </CheckboxOptionWithHelp>
 
       <CheckboxOptionWithHelp

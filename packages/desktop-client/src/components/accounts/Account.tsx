@@ -73,7 +73,10 @@ import {
   replaceModal,
 } from '#modals/modalsSlice';
 import type { ConfirmTransactionEditReason } from '#modals/modalsSlice';
-import { addNotification } from '#notifications/notificationsSlice';
+import {
+  addNotification,
+  removeNotification,
+} from '#notifications/notificationsSlice';
 import { useCreatePayeeMutation } from '#payees';
 import * as queries from '#queries';
 import { aqlQuery } from '#queries/aqlQuery';
@@ -92,6 +95,19 @@ function isTransactionFilterEntity(
   filter: ConditionEntity,
 ): filter is TransactionFilterEntity {
   return 'id' in filter;
+}
+
+function getErrorMessage(error: unknown): string | undefined {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = error.message;
+    return typeof message === 'string' ? message : undefined;
+  }
+
+  return undefined;
 }
 
 type AllTransactionsProps = {
@@ -215,6 +231,8 @@ type AccountInternalProps = {
   setShowNetWorthChart: (newValue: boolean) => void;
   showCleared?: boolean;
   setShowCleared: (newValue: boolean) => void;
+  showCategorizationDetails: boolean;
+  setShowCategorizationDetails: (newValue: boolean) => void;
   showReconciled: boolean;
   setShowReconciled: (newValue: boolean) => void;
   showExtraBalances?: boolean;
@@ -260,6 +278,7 @@ type AccountInternalState = {
   filterConditionsOp: 'and' | 'or';
   loading: boolean;
   workingHard: boolean;
+  autoClassifying: boolean;
   reconcileAmount: null | number;
   transactions: TransactionEntity[];
   transactionsFiltered?: boolean;
@@ -311,6 +330,7 @@ class AccountInternal extends PureComponent<
       filterConditionsOp: 'and',
       loading: true,
       workingHard: false,
+      autoClassifying: false,
       reconcileAmount: null,
       transactions: [],
       showBalances: props.showBalances,
@@ -740,6 +760,61 @@ class AccountInternal extends PureComponent<
     }
   };
 
+  onAutoClassify = async (ids?: string[]) => {
+    const notificationId = 'llm-auto-classify-progress';
+    try {
+      this.setState({ workingHard: true, autoClassifying: true });
+      this.props.dispatch(
+        addNotification({
+          notification: {
+            id: notificationId,
+            type: 'message',
+            sticky: true,
+            message:
+              ids && ids.length > 0
+                ? t('Auto-classifying {{count}} selected transactions...', {
+                    count: ids.length,
+                  })
+                : t('Auto-classifying uncategorized transactions...'),
+          },
+        }),
+      );
+      const { classified } = await send(
+        'transactions-llm-classify-uncategorized',
+        ids && ids.length > 0 ? { ids } : undefined,
+      );
+      this.props.dispatch(removeNotification({ id: notificationId }));
+      this.props.dispatch(
+        addNotification({
+          notification: {
+            type: 'message',
+            message:
+              classified === 1
+                ? t('Auto-classified 1 transaction.')
+                : t('Auto-classified {{count}} transactions.', {
+                    count: classified,
+                  }),
+          },
+        }),
+      );
+      this.fetchTransactions(this.state.filterConditions);
+    } catch (error) {
+      console.error('Error auto-classifying transactions:', error);
+      this.props.dispatch(removeNotification({ id: notificationId }));
+      this.props.dispatch(
+        addNotification({
+          notification: {
+            type: 'error',
+            message: t('Failed to auto-classify transactions.'),
+            pre: getErrorMessage(error),
+          },
+        }),
+      );
+    } finally {
+      this.setState({ workingHard: false, autoClassifying: false });
+    }
+  };
+
   onAddTransaction = () => {
     this.setState({ isAdding: true });
   };
@@ -776,6 +851,7 @@ class AccountInternal extends PureComponent<
       | 'reopen'
       | 'export'
       | 'toggle-balance'
+      | 'toggle-categorization-details'
       | 'remove-sorting'
       | 'toggle-cleared'
       | 'toggle-reconciled'
@@ -867,6 +943,11 @@ class AccountInternal extends PureComponent<
           this.props.setShowCleared(true);
           this.setState({ showCleared: true });
         }
+        break;
+      case 'toggle-categorization-details':
+        this.props.setShowCategorizationDetails(
+          !this.props.showCategorizationDetails,
+        );
         break;
       case 'toggle-reconciled':
         if (this.state.showReconciled) {
@@ -1727,6 +1808,7 @@ class AccountInternal extends PureComponent<
       showCleared,
       showReconciled,
       filteredAmount,
+      autoClassifying,
     } = this.state;
 
     const account = accounts.find(account => account.id === accountId);
@@ -1781,6 +1863,7 @@ class AccountInternal extends PureComponent<
                 tableRef={this.table}
                 isNameEditable={isNameEditable ?? false}
                 workingHard={workingHard ?? false}
+                autoClassifying={autoClassifying}
                 accountId={accountId}
                 account={account}
                 filterId={filterId}
@@ -1792,6 +1875,7 @@ class AccountInternal extends PureComponent<
                 showBalances={showBalances ?? false}
                 showExtraBalances={showExtraBalances ?? false}
                 showCleared={showCleared ?? false}
+                showCategorizationDetails={this.props.showCategorizationDetails}
                 showReconciled={showReconciled ?? false}
                 showEmptyMessage={showEmptyMessage ?? false}
                 balanceQuery={balanceQuery}
@@ -1818,6 +1902,7 @@ class AccountInternal extends PureComponent<
                 }
                 onSync={this.onSync}
                 onImport={this.onImport}
+                onAutoClassify={this.onAutoClassify}
                 onBatchDelete={this.onBatchDelete}
                 onBatchDuplicate={this.onBatchDuplicate}
                 onRunRules={this.onRunRules}
@@ -1857,6 +1942,9 @@ class AccountInternal extends PureComponent<
                   showBalances={!!allBalances}
                   showReconciled={showReconciled}
                   showCleared={!!showCleared}
+                  showCategorizationDetails={
+                    this.props.showCategorizationDetails
+                  }
                   showAccount={
                     !accountId ||
                     accountId === 'offbudget' ||
@@ -1996,6 +2084,8 @@ export function Account() {
   const [hideReconciled, setHideReconciled] = useSyncedPref(
     `hide-reconciled-${params.id}`,
   );
+  const [showCategorizationDetails, setShowCategorizationDetails] =
+    useSyncedPref(`show-categorization-details-${params.id || 'all-accounts'}`);
   const [showExtraBalances, setShowExtraBalances] = useSyncedPref(
     `show-extra-balances-${params.id || 'all-accounts'}`,
   );
@@ -2049,6 +2139,12 @@ export function Account() {
             setShowNetWorthChart={val => setShowNetWorthChart(String(val))}
             showCleared={String(hideCleared) !== 'true'}
             setShowCleared={val => setHideCleared(String(!val))}
+            showCategorizationDetails={
+              String(showCategorizationDetails) === 'true'
+            }
+            setShowCategorizationDetails={val =>
+              setShowCategorizationDetails(String(val))
+            }
             showReconciled={String(hideReconciled) !== 'true'}
             setShowReconciled={val => setHideReconciled(String(!val))}
             showExtraBalances={String(showExtraBalances) === 'true'}

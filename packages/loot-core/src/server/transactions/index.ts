@@ -4,6 +4,7 @@ import * as connection from '#platform/server/connection';
 import * as db from '#server/db';
 import { incrFetch, whereIn } from '#server/db/util';
 import { batchMessages } from '#server/sync';
+import { currentDay } from '#shared/months';
 import type { Diff } from '#shared/util';
 import type { PayeeEntity, TransactionEntity } from '#types/models';
 
@@ -37,6 +38,39 @@ async function getTransactionsByIds(
   );
 }
 
+function applyCategorizationMetadata<T extends Partial<TransactionEntity>>(
+  transaction: T,
+  previous?: TransactionEntity | null,
+  defaultSource: TransactionEntity['categorization_source'] = 'manual',
+  defaultNote = '',
+): T {
+  if (!('category' in transaction)) {
+    return transaction;
+  }
+
+  const categoryChanged =
+    !previous || transaction.category !== previous.category;
+  if (!categoryChanged) {
+    return transaction;
+  }
+
+  if (!transaction.category) {
+    return {
+      ...transaction,
+      categorization_source: null,
+      categorization_date: null,
+      categorization_note: null,
+    };
+  }
+
+  return {
+    ...transaction,
+    categorization_source: transaction.categorization_source ?? defaultSource,
+    categorization_date: transaction.categorization_date ?? currentDay(),
+    categorization_note: transaction.categorization_note ?? defaultNote,
+  };
+}
+
 export async function batchUpdateTransactions({
   added,
   deleted,
@@ -44,10 +78,14 @@ export async function batchUpdateTransactions({
   learnCategories = false,
   detectOrphanPayees = true,
   runTransfers = true,
+  categorizationDefaultSource = 'manual',
+  categorizationDefaultNote = '',
 }: Partial<Diff<TransactionEntity>> & {
   learnCategories?: boolean;
   detectOrphanPayees?: boolean;
   runTransfers?: boolean;
+  categorizationDefaultSource?: TransactionEntity['categorization_source'];
+  categorizationDefaultNote?: string;
 }) {
   // Track the ids of each type of transaction change (see below for why)
   let addedIds = [];
@@ -60,6 +98,15 @@ export async function batchUpdateTransactions({
   const accounts = await db.all<db.DbAccount>(
     'SELECT * FROM accounts WHERE tombstone = 0',
   );
+  const previousTransactionsById =
+    updatedIds.length > 0
+      ? new Map(
+          (await getTransactionsByIds(updatedIds)).map(transaction => [
+            transaction.id,
+            transaction,
+          ]),
+        )
+      : new Map<TransactionEntity['id'], TransactionEntity>();
 
   // We need to get all the payees of updated transactions _before_
   // making changes
@@ -86,7 +133,14 @@ export async function batchUpdateTransactions({
           if (t.is_parent || account?.offbudget === 1) {
             t.category = null;
           }
-          return db.insertTransaction(t);
+          return db.insertTransaction(
+            applyCategorizationMetadata(
+              t,
+              null,
+              categorizationDefaultSource,
+              categorizationDefaultNote,
+            ),
+          );
         }),
       );
     }
@@ -115,7 +169,14 @@ export async function batchUpdateTransactions({
             }
           }
 
-          await db.updateTransaction(t);
+          await db.updateTransaction(
+            applyCategorizationMetadata(
+              t,
+              previousTransactionsById.get(t.id),
+              categorizationDefaultSource,
+              categorizationDefaultNote,
+            ),
+          );
         }),
       );
     }

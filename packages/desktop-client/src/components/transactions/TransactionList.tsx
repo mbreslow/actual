@@ -263,6 +263,7 @@ type TransactionListProps = Pick<
   | 'renderEmpty'
   | 'showAccount'
   | 'showBalances'
+  | 'showCategorizationDetails'
   | 'showCleared'
   | 'showReconciled'
   | 'showSelection'
@@ -297,6 +298,7 @@ export function TransactionList({
   payees,
   balances,
   showBalances,
+  showCategorizationDetails,
   showReconciled,
   showCleared,
   showAccount,
@@ -734,6 +736,7 @@ export function TransactionList({
         payees={payees}
         balances={balances}
         showBalances={showBalances}
+        showCategorizationDetails={showCategorizationDetails}
         showReconciled={showReconciled}
         showCleared={showCleared}
         showAccount={showAccount}

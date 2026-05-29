@@ -175,6 +175,9 @@ export type DbTransaction = {
   sort_order: number;
   parent_id?: DbTransaction['id'] | null;
   category?: DbCategory['id'] | null;
+  categorization_source?: 'manual' | 'ai' | 'rule' | 'imported' | null;
+  categorization_date?: number | null;
+  categorization_note?: string | null;
   description?: string | null;
   notes?: string | null;
   financial_id?: string | null;
@@ -283,6 +286,9 @@ export type DbViewTransactionInternal = {
   amount: DbTransaction['amount'];
   parent_id: DbTransaction['parent_id'] | null;
   category: DbCategory['id'] | null;
+  categorization_source: DbTransaction['categorization_source'];
+  categorization_date: DbTransaction['categorization_date'];
+  categorization_note: DbTransaction['categorization_note'];
   payee: DbPayee['id'] | null;
   notes: DbTransaction['notes'] | null;
   imported_id: DbTransaction['financial_id'] | null;

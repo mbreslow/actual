@@ -153,6 +153,7 @@ type TransactionHeaderProps = {
   hasSelected: boolean;
   showAccount: boolean;
   showCategory: boolean;
+  showCategorizationDetails: boolean;
   showBalance: boolean;
   showCleared: boolean;
   scrollWidth: number;
@@ -167,6 +168,7 @@ const TransactionHeader = memo(
     hasSelected,
     showAccount,
     showCategory,
+    showCategorizationDetails,
     showBalance,
     showCleared,
     scrollWidth,
@@ -290,6 +292,52 @@ const TransactionHeader = memo(
             }
           />
         )}
+        {showCategorizationDetails && (
+          <>
+            <HeaderCell
+              value={t('Categorized by')}
+              width={120}
+              alignItems="flex"
+              marginLeft={-5}
+              id="categorization_source"
+              icon={field === 'categorization_source' ? ascDesc : 'clickable'}
+              onClick={() =>
+                onSort(
+                  'categorization_source',
+                  selectAscDesc(field, ascDesc, 'categorization_source', 'asc'),
+                )
+              }
+            />
+            <HeaderCell
+              value={t('Categorized on')}
+              width={120}
+              alignItems="flex"
+              marginLeft={-5}
+              id="categorization_date"
+              icon={field === 'categorization_date' ? ascDesc : 'clickable'}
+              onClick={() =>
+                onSort(
+                  'categorization_date',
+                  selectAscDesc(field, ascDesc, 'categorization_date', 'desc'),
+                )
+              }
+            />
+            <HeaderCell
+              value={t('Categorization note')}
+              width={180}
+              alignItems="flex"
+              marginLeft={-5}
+              id="categorization_note"
+              icon={field === 'categorization_note' ? ascDesc : 'clickable'}
+              onClick={() =>
+                onSort(
+                  'categorization_note',
+                  selectAscDesc(field, ascDesc, 'categorization_note', 'asc'),
+                )
+              }
+            />
+          </>
+        )}
         <HeaderCell
           value={t('Payment')}
           width={100}
@@ -342,6 +390,24 @@ const TransactionHeader = memo(
 );
 
 TransactionHeader.displayName = 'TransactionHeader';
+
+function formatCategorizationSource(
+  source: TransactionEntity['categorization_source'],
+  t: ReturnType<typeof useTranslation>['t'],
+) {
+  switch (source) {
+    case 'manual':
+      return t('Manual');
+    case 'ai':
+      return t('AI');
+    case 'rule':
+      return t('Rule');
+    case 'imported':
+      return t('Imported');
+    default:
+      return '';
+  }
+}
 
 type StatusCellProps = {
   id: TransactionEntity['id'];
@@ -853,6 +919,7 @@ type TransactionProps = {
   showAccount?: boolean;
   showBalance?: boolean;
   showCleared?: boolean;
+  showCategorizationDetails?: boolean;
   showZeroInDeposit?: boolean;
   style?: CSSProperties;
   selected?: boolean;
@@ -920,6 +987,7 @@ const Transaction = memo(function Transaction({
   showAccount,
   showBalance,
   showCleared,
+  showCategorizationDetails,
   showZeroInDeposit,
   style,
   selected,
@@ -1103,6 +1171,21 @@ const Transaction = memo(function Transaction({
       getAccountsById(accounts)[value].offbudget
     ) {
       newTransaction.category = undefined;
+      newTransaction.categorization_source = null;
+      newTransaction.categorization_date = null;
+      newTransaction.categorization_note = null;
+    }
+
+    if (name === 'category') {
+      if (value) {
+        newTransaction.categorization_source = 'manual';
+        newTransaction.categorization_date = monthUtils.currentDay();
+        newTransaction.categorization_note = '';
+      } else {
+        newTransaction.categorization_source = null;
+        newTransaction.categorization_date = null;
+        newTransaction.categorization_note = null;
+      }
     }
 
     // If entering an amount in either of the credit/debit fields, we
@@ -1157,6 +1240,9 @@ const Transaction = memo(function Transaction({
     date,
     account: accountId,
     category: categoryId,
+    categorization_source: categorizationSource,
+    categorization_date: categorizationDate,
+    categorization_note: categorizationNote,
     cleared,
     reconciled,
     forceUpcoming,
@@ -1791,6 +1877,55 @@ const Transaction = memo(function Transaction({
           </CustomCell>
         )}
 
+        {showCategorizationDetails && (
+          <>
+            <Cell
+              name="categorization_source"
+              value={
+                isPreview || isParent
+                  ? ''
+                  : formatCategorizationSource(categorizationSource, t)
+              }
+              title={
+                isPreview || isParent
+                  ? ''
+                  : formatCategorizationSource(categorizationSource, t)
+              }
+              width={120}
+              style={{
+                color: theme.pageTextSubdued,
+                fontWeight: 300,
+              }}
+            />
+            <Cell
+              name="categorization_date"
+              value={
+                isPreview || isParent || !categorizationDate
+                  ? ''
+                  : formatDate(parseISO(categorizationDate), dateFormat)
+              }
+              width={120}
+              style={{
+                color: theme.pageTextSubdued,
+                fontWeight: 300,
+              }}
+            />
+            <Cell
+              name="categorization_note"
+              value={isPreview || isParent ? '' : (categorizationNote ?? '')}
+              title={isPreview || isParent ? '' : (categorizationNote ?? '')}
+              width={180}
+              style={{
+                color: theme.pageTextSubdued,
+                fontWeight: 300,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            />
+          </>
+        )}
+
         <InputCell
           /* Debit field for all transactions */
           type="input"
@@ -2124,6 +2259,7 @@ type NewTransactionProps = {
   showBalance?: boolean;
   balance?: number | null;
   showCleared?: boolean;
+  showCategorizationDetails?: boolean;
   transactions: TransactionEntity[];
   transferAccountsByTransaction: {
     [id: TransactionEntity['id']]: AccountEntity | null;
@@ -2141,6 +2277,7 @@ function NewTransaction({
   showAccount,
   showBalance,
   showCleared,
+  showCategorizationDetails,
   dateFormat,
   hideFraction,
   onClose,
@@ -2206,6 +2343,7 @@ function NewTransaction({
           showAccount={showAccount}
           showBalance={showBalance}
           showCleared={showCleared}
+          showCategorizationDetails={showCategorizationDetails}
           focusedField={
             editingTransaction === transaction.id ? focusedField : undefined
           }
@@ -2301,6 +2439,7 @@ type TransactionTableInnerProps = {
   showReconciled: boolean;
   showCleared: boolean;
   showAccount: boolean;
+  showCategorizationDetails: boolean;
   showCategory: boolean;
   currentAccountId: AccountEntity['id'];
   currentCategoryId: CategoryEntity['id'];
@@ -2438,6 +2577,7 @@ function TransactionTableInner({
       payees,
       showCleared,
       showAccount,
+      showCategorizationDetails,
       showBalances,
       balances,
       hideFraction,
@@ -2512,6 +2652,7 @@ function TransactionTableInner({
         showAccount={showAccount}
         showBalance={showBalances}
         showCleared={showCleared}
+        showCategorizationDetails={showCategorizationDetails}
         selected={selected}
         highlighted={false}
         added={isNew?.(trans.id)}
@@ -2588,6 +2729,7 @@ function TransactionTableInner({
           hasSelected={props.selectedItems.size > 0}
           showAccount={props.showAccount}
           showCategory={props.showCategory}
+          showCategorizationDetails={props.showCategorizationDetails}
           showBalance={props.showBalances}
           showCleared={props.showCleared}
           scrollWidth={scrollWidth}
@@ -2616,6 +2758,7 @@ function TransactionTableInner({
               showAccount={props.showAccount}
               showBalance={props.showBalances}
               showCleared={props.showCleared}
+              showCategorizationDetails={props.showCategorizationDetails}
               dateFormat={dateFormat}
               hideFraction={props.hideFraction}
               onClose={props.onCloseAddTransaction}
@@ -2695,6 +2838,7 @@ export type TransactionTableProps = {
   showReconciled: boolean;
   showCleared: boolean;
   showAccount: boolean;
+  showCategorizationDetails: boolean;
   showCategory: boolean;
   currentAccountId: AccountEntity['id'];
   currentCategoryId: CategoryEntity['id'];

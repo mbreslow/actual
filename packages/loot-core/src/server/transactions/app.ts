@@ -1,3 +1,4 @@
+import { classifyExistingUncategorizedTransactions } from '#server/accounts/llm-classifier';
 import { createApp } from '#server/app';
 import { aqlQuery } from '#server/aql';
 import * as db from '#server/db';
@@ -28,6 +29,7 @@ export type TransactionHandlers = {
   'transactions-parse-file': typeof parseTransactionsFile;
   'transactions-export': typeof exportTransactions;
   'transactions-export-query': typeof exportTransactionsQuery;
+  'transactions-llm-classify-uncategorized': typeof classifyExistingUncategorizedTransactions;
   'transactions-merge': typeof mergeTransactions;
   'get-earliest-transaction': typeof getEarliestTransaction;
   'get-latest-transaction': typeof getLatestTransaction;
@@ -165,5 +167,9 @@ app.method('transaction-move', mutator(undoable(moveTransaction)));
 app.method('transactions-parse-file', mutator(parseTransactionsFile));
 app.method('transactions-export', mutator(exportTransactions));
 app.method('transactions-export-query', mutator(exportTransactionsQuery));
+app.method(
+  'transactions-llm-classify-uncategorized',
+  mutator(undoable(classifyExistingUncategorizedTransactions)),
+);
 app.method('get-earliest-transaction', getEarliestTransaction);
 app.method('get-latest-transaction', getLatestTransaction);

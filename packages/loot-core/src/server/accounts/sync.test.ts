@@ -77,6 +77,116 @@ async function getAllPayees() {
 }
 
 describe('Account sync', () => {
+  test('bank sync LLM categorization is disabled by default', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}'));
+    const { id: acctId } = await prepareDatabase();
+
+    await asyncStorage.setItem('llmClassificationConfig', {
+      provider: 'ollama',
+      model: 'test-model',
+    });
+
+    await reconcileTransactions(
+      acctId,
+      [
+        {
+          date: '2020-01-02',
+          payeeName: 'Kroger',
+          transactionAmount: { amount: '-12.34' },
+          transactionId: 'llm-disabled',
+          booked: true,
+        },
+      ],
+      true,
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockRestore();
+  });
+
+  test('bank sync LLM categorizes only new uncategorized transactions', async () => {
+    const { id: acctId } = await prepareDatabase();
+    await db.insertCategoryGroup({
+      id: 'expenses',
+      name: 'Expenses',
+      is_income: 0,
+    });
+    const groceries = await db.insertCategory({
+      id: 'groceries',
+      name: 'Groceries',
+      cat_group: 'expenses',
+      is_income: 0,
+    });
+    const travel = await db.insertCategory({
+      id: 'travel',
+      name: 'Travel',
+      cat_group: 'expenses',
+      is_income: 0,
+    });
+
+    await db.update('preferences', {
+      id: `sync-llm-classify-${acctId}` satisfies keyof SyncedPrefs,
+      value: 'true',
+    });
+    await asyncStorage.setItem('llmClassificationConfig', {
+      provider: 'ollama',
+      model: 'test-model',
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          message: {
+            content: JSON.stringify({
+              classifications: [
+                {
+                  id: 1,
+                  categoryId: groceries,
+                  confidence: 0.99,
+                  reason: 'Grocery merchant',
+                },
+              ],
+            }),
+          },
+        }),
+      ),
+    );
+
+    await reconcileTransactions(
+      acctId,
+      [
+        {
+          date: '2020-01-02',
+          payeeName: 'Kroger',
+          transactionAmount: { amount: '-12.34' },
+          transactionId: 'llm-enabled',
+          booked: true,
+        },
+        {
+          date: '2020-01-03',
+          payeeName: 'Hotel',
+          transactionAmount: { amount: '-55.00' },
+          transactionId: 'already-categorized',
+          booked: true,
+          category: travel,
+        },
+      ],
+      true,
+    );
+
+    const transactions = await getAllTransactions();
+    expect(
+      transactions.find(t => t.imported_id === 'llm-enabled')?.category,
+    ).toBe(groceries);
+    expect(
+      transactions.find(t => t.imported_id === 'already-categorized')?.category,
+    ).toBe(travel);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockRestore();
+  });
+
   test('reconcile creates payees correctly', async () => {
     const { id } = await prepareDatabase();
 
