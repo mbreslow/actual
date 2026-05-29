@@ -21,8 +21,9 @@ import {
   ungroupTransactions,
   updateTransaction,
 } from '@actual-app/core/shared/transactions';
-import { applyChanges } from '@actual-app/core/shared/util';
+import { applyChanges, integerToCurrency } from '@actual-app/core/shared/util';
 import type { IntegerAmount } from '@actual-app/core/shared/util';
+import { format as formatDate, parseISO } from 'date-fns';
 import type {
   AccountEntity,
   CategoryGroupEntity,
@@ -37,6 +38,11 @@ import { t } from 'i18next';
 import debounce from 'lodash/debounce';
 import isEqual from 'lodash/isEqual';
 import { v4 as uuidv4 } from 'uuid';
+
+import { Button } from '@actual-app/components/button';
+import { AnimatedLoading } from '@actual-app/components/icons/AnimatedLoading';
+import { SvgDelete } from '@actual-app/components/icons/v0';
+import { Text } from '@actual-app/components/text';
 
 import {
   useReopenAccountMutation,
@@ -297,6 +303,22 @@ type AccountInternalState = {
     prevAscDesc?: 'asc' | 'desc' | undefined;
   } | null;
   filteredAmount: null | number;
+  autoClassificationById: Record<
+    string,
+    {
+      status: 'classifying' | 'classified' | 'fading';
+      category?: string;
+      transaction?: TransactionEntity;
+    }
+  >;
+  recentClassifications: Array<{
+    id: string;
+    date: string;
+    payee: string;
+    amount: number;
+    categoryName: string;
+    notes: string;
+  }>;
 };
 
 export type TableRef = RefObject<{
@@ -341,6 +363,8 @@ class AccountInternal extends PureComponent<
       isAdding: false,
       sort: null,
       filteredAmount: null,
+      autoClassificationById: {},
+      recentClassifications: [],
     };
   }
 
@@ -761,46 +785,134 @@ class AccountInternal extends PureComponent<
   };
 
   onAutoClassify = async (ids?: string[]) => {
-    const notificationId = 'llm-auto-classify-progress';
     try {
-      this.setState({ workingHard: true, autoClassifying: true });
-      this.props.dispatch(
-        addNotification({
-          notification: {
-            id: notificationId,
-            type: 'message',
-            sticky: true,
-            message:
-              ids && ids.length > 0
-                ? t('Auto-classifying {{count}} selected transactions...', {
-                    count: ids.length,
-                  })
-                : t('Auto-classifying uncategorized transactions...'),
+      this.setState({
+        workingHard: true,
+        autoClassifying: true,
+        recentClassifications: [],
+      });
+
+      let idsToClassify = ids && ids.length > 0 ? ids : [];
+      if (idsToClassify.length === 0) {
+        idsToClassify = this.state.transactions
+          .filter(t => !t.category && !t.is_parent)
+          .map(t => t.id);
+      }
+
+      for (const id of idsToClassify) {
+        const trans = this.state.transactions.find(t => t.id === id);
+        this.setState(state => ({
+          autoClassificationById: {
+            ...state.autoClassificationById,
+            [id]: { status: 'classifying', transaction: trans },
           },
-        }),
-      );
-      const { classified } = await send(
-        'transactions-llm-classify-uncategorized',
-        ids && ids.length > 0 ? { ids } : undefined,
-      );
-      this.props.dispatch(removeNotification({ id: notificationId }));
-      this.props.dispatch(
-        addNotification({
-          notification: {
-            type: 'message',
-            message:
-              classified === 1
-                ? t('Auto-classified 1 transaction.')
-                : t('Auto-classified {{count}} transactions.', {
-                    count: classified,
-                  }),
-          },
-        }),
-      );
+        }));
+
+        try {
+          const res = await send('transactions-llm-classify-uncategorized', {
+            ids: [id],
+          });
+
+          if (res && res.updates && res.updates.length > 0) {
+            const update = res.updates[0];
+
+            const payee = trans ? this.props.payees.find(p => p.id === trans.payee) : null;
+            const payeeName = payee ? payee.name : (trans?.imported_payee || '');
+            const category = this.props.categoryGroups
+              .flatMap(g => g.categories)
+              .find(c => c?.id === update.category);
+            const categoryName = category ? category.name : '';
+
+            const classificationRecord = {
+              id: trans?.id || id,
+              date: trans?.date || '',
+              payee: payeeName,
+              amount: trans?.amount || 0,
+              categoryName: categoryName || t('Uncategorized'),
+              notes: update.categorization_note || '',
+            };
+
+            this.setState(state => ({
+              autoClassificationById: {
+                ...state.autoClassificationById,
+                [id]: {
+                  status: 'classified',
+                  category: update.category,
+                  transaction: trans,
+                },
+              },
+              recentClassifications: [
+                classificationRecord,
+                ...(state.recentClassifications || []),
+              ].slice(0, 5),
+            }));
+
+            // Hold for 3 seconds
+            await new Promise(resolve => setTimeout(resolve, 3000));
+
+            // Mark as fading
+            this.setState(state => ({
+              autoClassificationById: {
+                ...state.autoClassificationById,
+                [id]: {
+                  status: 'fading',
+                  category: update.category,
+                  transaction: trans,
+                },
+              },
+            }));
+
+            // Wait 300ms for fade out transition
+            await new Promise(resolve => setTimeout(resolve, 300));
+
+            this.setState(
+              state => {
+                const nextMap = { ...state.autoClassificationById };
+                delete nextMap[id];
+                return { autoClassificationById: nextMap };
+              },
+              () => {
+                this.fetchTransactions(this.state.filterConditions);
+              },
+            );
+          } else {
+            this.setState(state => {
+              const nextMap = { ...state.autoClassificationById };
+              delete nextMap[id];
+              return { autoClassificationById: nextMap };
+            });
+          }
+        } catch (err: any) {
+          this.setState(state => {
+            const nextMap = { ...state.autoClassificationById };
+            delete nextMap[id];
+            return { autoClassificationById: nextMap };
+          });
+
+          const errorMessage = err?.message || String(err);
+          const isConfigOrProviderError =
+            errorMessage.includes('configured') ||
+            errorMessage.includes('HTTP 40') ||
+            errorMessage.includes('HTTP 50') ||
+            errorMessage.includes('API key') ||
+            errorMessage.includes('key') ||
+            errorMessage.includes('endpoint') ||
+            errorMessage.includes('Unsupported LLM provider') ||
+            errorMessage.includes('Failed to fetch');
+
+          if (isConfigOrProviderError) {
+            throw err;
+          }
+          console.warn(
+            `Row-level classification error for transaction ${id}:`,
+            err,
+          );
+        }
+      }
+
       this.fetchTransactions(this.state.filterConditions);
     } catch (error) {
       console.error('Error auto-classifying transactions:', error);
-      this.props.dispatch(removeNotification({ id: notificationId }));
       this.props.dispatch(
         addNotification({
           notification: {
@@ -1809,6 +1921,8 @@ class AccountInternal extends PureComponent<
       showReconciled,
       filteredAmount,
       autoClassifying,
+      autoClassificationById = {},
+      recentClassifications = [],
     } = this.state;
 
     const account = accounts.find(account => account.id === accountId);
@@ -1842,10 +1956,47 @@ class AccountInternal extends PureComponent<
       return !item._unmatched;
     };
 
+    const mergedTransactions = [...transactions];
+    for (const [id, classification] of Object.entries(autoClassificationById)) {
+      if (classification.transaction) {
+        const exists = mergedTransactions.some(t => t.id === id);
+        if (!exists) {
+          const tx = {
+            ...classification.transaction,
+            category:
+              classification.category || classification.transaction.category,
+          };
+
+          const insertIdx = mergedTransactions.findIndex(t => {
+            if (t.date !== tx.date) {
+              return t.date < tx.date;
+            }
+            if (t.sort_order !== tx.sort_order) {
+              return (t.sort_order || 0) < (tx.sort_order || 0);
+            }
+            return t.id < tx.id;
+          });
+          if (insertIdx === -1) {
+            mergedTransactions.push(tx);
+          } else {
+            mergedTransactions.splice(insertIdx, 0, tx);
+          }
+        }
+      }
+    }
+
+    const displayedTransactions = mergedTransactions.map(t => {
+      const classification = autoClassificationById[t.id];
+      if (classification && classification.category) {
+        return { ...t, category: classification.category };
+      }
+      return t;
+    });
+
     return (
       <AllTransactions
         account={account}
-        transactions={transactions}
+        transactions={displayedTransactions}
         balances={balances}
         showBalances={showBalances}
         filtered={transactionsFiltered}
@@ -1931,6 +2082,7 @@ class AccountInternal extends PureComponent<
                   account={account}
                   transactions={transactions}
                   allTransactions={allTransactions}
+                  autoClassificationById={autoClassificationById}
                   loadMoreTransactions={() =>
                     this.paged && this.paged.fetchNext()
                   }
@@ -2008,6 +2160,15 @@ class AccountInternal extends PureComponent<
                   onApplyFilter={this.onApplyFilter}
                 />
               </View>
+
+              {recentClassifications && recentClassifications.length > 0 && (
+                <AutoClassificationToast
+                  recentClassifications={recentClassifications}
+                  autoClassifying={autoClassifying}
+                  dateFormat={dateFormat || 'MM/dd/yyyy'}
+                  onClose={() => this.setState({ recentClassifications: [] })}
+                />
+              )}
             </View>
           </SelectedProviderWithItems>
         )}
@@ -2171,3 +2332,194 @@ export function Account() {
     </ErrorBoundary>
   );
 }
+
+type AutoClassificationToastProps = {
+  recentClassifications: Array<{
+    id: string;
+    date: string;
+    payee: string;
+    amount: number;
+    categoryName: string;
+    notes: string;
+  }>;
+  autoClassifying: boolean;
+  dateFormat: string;
+  onClose: () => void;
+};
+
+export function AutoClassificationToast({
+  recentClassifications,
+  autoClassifying,
+  dateFormat,
+  onClose,
+}: AutoClassificationToastProps) {
+  return (
+    <View
+      style={{
+        position: 'fixed',
+        bottom: 20,
+        right: 20,
+        width: 680,
+        maxWidth: 'calc(100% - 40px)',
+        backgroundColor: theme.noticeBackgroundLight,
+        borderTop: `4px solid ${theme.noticeBorder}`,
+        borderRadius: 8,
+        padding: '16px 20px',
+        zIndex: 10000,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        color: theme.noticeText,
+        ...styles.shadowLarge,
+      }}
+    >
+      <View
+        style={{
+          display: 'flex',
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <View style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Text style={{ fontWeight: 700, fontSize: 14 }}>
+            {autoClassifying ? (
+              <Trans>Auto-classifying transactions...</Trans>
+            ) : (
+              <Trans>Auto-classification completed</Trans>
+            )}
+          </Text>
+          {autoClassifying && (
+            <AnimatedLoading
+              style={{ width: 16, height: 16, color: theme.noticeBorder }}
+            />
+          )}
+        </View>
+        <Button
+          variant="bare"
+          aria-label={t('Close')}
+          style={{
+            padding: 4,
+            color: 'currentColor',
+            opacity: 0.7,
+            cursor: 'pointer',
+          }}
+          onPress={onClose}
+        >
+          <SvgDelete style={{ width: 10, height: 10 }} />
+        </Button>
+      </View>
+
+      <View style={{ overflowX: 'auto' }}>
+        <table
+          style={{
+            width: '100%',
+            borderCollapse: 'collapse',
+            fontSize: 12,
+            textAlign: 'left',
+          }}
+        >
+          <thead>
+            <tr
+              style={{
+                borderBottom: `1px solid ${theme.noticeBorder}40`,
+                opacity: 0.8,
+              }}
+            >
+              <th style={{ padding: '6px 8px', fontWeight: 600 }}><Trans>Date</Trans></th>
+              <th style={{ padding: '6px 8px', fontWeight: 600 }}><Trans>Payee</Trans></th>
+              <th style={{ padding: '6px 8px', fontWeight: 600, textAlign: 'right' }}><Trans>Amount</Trans></th>
+              <th style={{ padding: '6px 8px', fontWeight: 600 }}><Trans>Assigned Category</Trans></th>
+              <th style={{ padding: '6px 8px', fontWeight: 600 }}><Trans>Reason/Notes</Trans></th>
+            </tr>
+          </thead>
+          <tbody>
+            {recentClassifications.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={5}
+                  style={{
+                    padding: '16px 8px',
+                    textAlign: 'center',
+                    fontStyle: 'italic',
+                    opacity: 0.7,
+                  }}
+                >
+                  <Trans>Analyzing transactions...</Trans>
+                </td>
+              </tr>
+            ) : (
+              recentClassifications.map(row => {
+                let formattedDate = row.date;
+                try {
+                  formattedDate = formatDate(parseISO(row.date), dateFormat);
+                } catch (e) {
+                  // Fallback
+                }
+                return (
+                  <tr
+                    key={row.id}
+                    style={{
+                      borderBottom: `1px solid ${theme.noticeBorder}15`,
+                    }}
+                  >
+                    <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>
+                      {formattedDate}
+                    </td>
+                    <td
+                      style={{
+                        padding: '8px',
+                        maxWidth: 120,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                      title={row.payee}
+                    >
+                      {row.payee}
+                    </td>
+                    <td
+                      style={{
+                        padding: '8px',
+                        textAlign: 'right',
+                        whiteSpace: 'nowrap',
+                        ...styles.tnum,
+                        fontWeight: 500,
+                      }}
+                    >
+                      {integerToCurrency(row.amount)}
+                    </td>
+                    <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>
+                      <span
+                        style={{
+                          backgroundColor: 'rgba(0, 0, 0, 0.06)',
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                          fontSize: 11,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {row.categoryName}
+                      </span>
+                    </td>
+                    <td
+                      style={{
+                        padding: '8px',
+                        fontSize: 11,
+                        opacity: 0.9,
+                        lineHeight: '1.3em',
+                      }}
+                    >
+                      {row.notes}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </View>
+    </View>
+  );
+}
+

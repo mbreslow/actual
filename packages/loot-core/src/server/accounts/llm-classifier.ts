@@ -535,10 +535,6 @@ async function classifyCandidates(
     >
   >
 > {
-  const batchSize = Math.max(
-    1,
-    Math.min(config.batchSize || DEFAULT_BATCH_SIZE, 50),
-  );
   const updates: Array<
     Pick<
       TransactionEntity,
@@ -550,8 +546,72 @@ async function classifyCandidates(
     >
   > = [];
 
-  for (let start = 0; start < candidates.length; start += batchSize) {
-    const chunk = candidates.slice(start, start + batchSize);
+  const db = await import('#server/db');
+  let memories: Array<{
+    imported_payee: string | null;
+    payee_name: string | null;
+    category_id: string;
+  }> = [];
+  try {
+    memories = await db.all<{
+      imported_payee: string | null;
+      payee_name: string | null;
+      category_id: string;
+    }>(
+      'SELECT imported_payee, payee_name, category_id FROM ai_classification_memories WHERE tombstone = 0',
+    );
+  } catch (error) {
+    logger.warn(
+      'Failed to read ai_classification_memories, using empty memory:',
+      error,
+    );
+  }
+
+  const importedPayeeMap = new Map<string, string>();
+  const payeeNameMap = new Map<string, string>();
+  for (const memory of memories) {
+    if (memory.imported_payee) {
+      importedPayeeMap.set(memory.imported_payee, memory.category_id);
+    }
+    if (memory.payee_name) {
+      payeeNameMap.set(memory.payee_name, memory.category_id);
+    }
+  }
+
+  const llmCandidates: ClassificationCandidate[] = [];
+  for (const candidate of candidates) {
+    let matchedCategoryId: string | undefined;
+    if (candidate.trans.imported_payee) {
+      matchedCategoryId = importedPayeeMap.get(candidate.trans.imported_payee);
+    }
+    if (!matchedCategoryId && candidate.payeeName) {
+      matchedCategoryId = payeeNameMap.get(candidate.payeeName);
+    }
+
+    if (matchedCategoryId) {
+      updates.push({
+        id: candidate.trans.id,
+        category: matchedCategoryId,
+        categorization_source: 'ai',
+        categorization_date: currentDay(),
+        categorization_note: 'Classified based on previous user correction',
+      });
+    } else {
+      llmCandidates.push(candidate);
+    }
+  }
+
+  if (llmCandidates.length === 0) {
+    return updates;
+  }
+
+  const batchSize = Math.max(
+    1,
+    Math.min(config.batchSize || DEFAULT_BATCH_SIZE, 50),
+  );
+
+  for (let start = 0; start < llmCandidates.length; start += batchSize) {
+    const chunk = llmCandidates.slice(start, start + batchSize);
     const promptTransactions = chunk.map((candidate, index) =>
       buildPromptTransaction({
         index: start + index + 1,
@@ -680,6 +740,16 @@ export async function classifyExistingUncategorizedTransactions({
   ids?: string[];
 } = {}): Promise<{
   classified: number;
+  updates?: Array<
+    Pick<
+      TransactionEntity,
+      | 'id'
+      | 'category'
+      | 'categorization_source'
+      | 'categorization_date'
+      | 'categorization_note'
+    >
+  >;
 }> {
   const config = await loadConfig();
   if (!isConfigured(config)) {
@@ -713,7 +783,7 @@ export async function classifyExistingUncategorizedTransactions({
   ]);
 
   if (categories.length === 0 || transactions.length === 0) {
-    return { classified: 0 };
+    return { classified: 0, updates: [] };
   }
 
   const payeeNames = new Map(payees.map(payee => [payee.id, payee.name]));
@@ -733,9 +803,40 @@ export async function classifyExistingUncategorizedTransactions({
       await batchUpdateTransactions({ updated, runTransfers: false });
     }
 
-    return { classified: updated.length };
+    return { classified: updated.length, updates: updated };
   } catch (error) {
     logger.warn('Skipping LLM transaction classification:', error);
     throw error;
+  }
+}
+
+export async function learnClassificationOverrides(
+  overrides: Array<{ previous: TransactionEntity; updated: TransactionEntity }>,
+): Promise<void> {
+  const db = await import('#server/db');
+  const payees = await db.getPayees();
+  const payeeNames = new Map(payees.map(payee => [payee.id, payee.name]));
+
+  for (const { previous, updated } of overrides) {
+    const importedPayee =
+      updated.imported_payee || previous.imported_payee || '';
+    const payeeId = updated.payee || previous.payee;
+    const payeeName = payeeId ? payeeNames.get(payeeId) || '' : '';
+
+    if (!importedPayee && !payeeName) {
+      continue;
+    }
+
+    const id = `${importedPayee}::${payeeName}`;
+
+    if (!updated.category) {
+      db.runQuery('DELETE FROM ai_classification_memories WHERE id = ?', [id]);
+    } else {
+      db.runQuery(
+        `INSERT OR REPLACE INTO ai_classification_memories (id, imported_payee, payee_name, category_id, tombstone)
+         VALUES (?, ?, ?, ?, 0)`,
+        [id, importedPayee, payeeName, updated.category],
+      );
+    }
   }
 }

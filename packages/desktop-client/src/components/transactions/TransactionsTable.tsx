@@ -23,6 +23,7 @@ import { useHotkeys } from 'react-hotkeys-hook';
 import { Trans, useTranslation } from 'react-i18next';
 
 import { Button } from '@actual-app/components/button';
+import { AnimatedLoading } from '@actual-app/components/icons/AnimatedLoading';
 import {
   SvgLeftArrow2,
   SvgRightArrow2,
@@ -976,6 +977,14 @@ type TransactionProps = {
   onDragChange?: OnDragChangeCallback<TransactionEntity>;
   onDrop?: OnDropCallback;
   index: number;
+  autoClassificationById?: Record<
+    string,
+    {
+      status: 'classifying' | 'classified' | 'fading';
+      category?: string;
+      transaction?: TransactionEntity;
+    }
+  >;
 };
 
 const Transaction = memo(function Transaction({
@@ -1036,6 +1045,7 @@ const Transaction = memo(function Transaction({
   onDragChange,
   onDrop,
   index,
+  autoClassificationById,
 }: TransactionProps) {
   const { t } = useTranslation();
 
@@ -1229,6 +1239,8 @@ const Transaction = memo(function Transaction({
     }
   };
 
+  const classification = autoClassificationById?.[transaction.id];
+
   const {
     id,
     amount,
@@ -1239,7 +1251,7 @@ const Transaction = memo(function Transaction({
     notes,
     date,
     account: accountId,
-    category: categoryId,
+    category: originalCategoryId,
     categorization_source: categorizationSource,
     categorization_date: categorizationDate,
     categorization_note: categorizationNote,
@@ -1249,6 +1261,8 @@ const Transaction = memo(function Transaction({
     is_parent: isParent,
     _unmatched = false,
   } = transaction;
+
+  const categoryId = classification?.category || originalCategoryId;
 
   const { schedules = [] } = useCachedSchedules();
   const schedule = transaction.schedule
@@ -1447,6 +1461,10 @@ const Transaction = memo(function Transaction({
           }),
           ...(_unmatched && { opacity: 0.5 }),
           ...(isBeingDragged && { opacity: 0.5 }),
+          ...(classification?.status === 'fading' && {
+            opacity: 0,
+            transition: 'opacity 0.3s ease',
+          }),
         }}
         onContextMenu={handleContextMenu}
       >
@@ -1818,24 +1836,44 @@ const Transaction = memo(function Transaction({
             width="flex"
             textAlign="flex"
             value={categoryId}
-            formatter={value =>
-              value
+            formatter={value => {
+              if (classification?.status === 'classifying') {
+                return (
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      alignSelf: 'stretch',
+                      justifyContent: 'flex-start',
+                    }}
+                  >
+                    <AnimatedLoading
+                      width={14}
+                      height={14}
+                      style={{ color: theme.formInputTextHighlight }}
+                    />
+                  </View>
+                ) as unknown as string;
+              }
+              return value
                 ? (getCategoriesById(categoryGroups)[value]?.name ?? '')
                 : transaction.id
                   ? t('Categorize')
-                  : ''
-            }
+                  : '';
+            }}
             exposed={focusedField === 'category'}
             onExpose={name => !isPreview && onEdit(id, name)}
             valueStyle={
-              !categoryId
-                ? {
-                    // uncategorized transaction
-                    fontStyle: 'italic',
-                    fontWeight: 300,
-                    color: theme.formInputTextHighlight,
-                  }
-                : valueStyle
+              classification?.status === 'classifying'
+                ? {}
+                : !categoryId
+                  ? {
+                      // uncategorized transaction
+                      fontStyle: 'italic',
+                      fontWeight: 300,
+                      color: theme.formInputTextHighlight,
+                    }
+                  : valueStyle
             }
             onUpdate={async value => {
               if (value === 'split') {
@@ -2489,6 +2527,14 @@ type TransactionTableInnerProps = {
 
   onSort: (field: string, ascDesc: 'asc' | 'desc') => void;
   showHiddenCategories?: boolean;
+  autoClassificationById?: Record<
+    string,
+    {
+      status: 'classifying' | 'classified' | 'fading';
+      category?: string;
+      transaction?: TransactionEntity;
+    }
+  >;
   // Drag and drop props
   canDrag?: boolean;
   draggedId?: TransactionEntity['id'] | null;
@@ -2711,6 +2757,7 @@ function TransactionTableInner({
         onDragChange={props.onDragChange}
         onDrop={props.onDrop}
         index={index}
+        autoClassificationById={props.autoClassificationById}
       />
     );
   };
@@ -2846,6 +2893,14 @@ export type TransactionTableProps = {
   isNew: (id: TransactionEntity['id']) => boolean;
   isMatched: (id: TransactionEntity['id']) => boolean;
   isFiltered?: boolean;
+  autoClassificationById?: Record<
+    string,
+    {
+      status: 'classifying' | 'classified' | 'fading';
+      category?: string;
+      transaction?: TransactionEntity;
+    }
+  >;
   dateFormat: string | undefined;
   hideFraction: boolean;
   renderEmpty: ReactNode | (() => ReactNode);

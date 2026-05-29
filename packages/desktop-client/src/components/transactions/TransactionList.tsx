@@ -276,6 +276,14 @@ type TransactionListProps = Pick<
   category: CategoryEntity | undefined;
   isFiltered?: boolean;
   allowReorder?: boolean;
+  autoClassificationById?: Record<
+    string,
+    {
+      status: 'classifying' | 'classified' | 'fading';
+      category?: string;
+      transaction?: TransactionEntity;
+    }
+  >;
   onChange: (
     transaction: TransactionEntity,
     transactions: TransactionEntity[],
@@ -307,6 +315,7 @@ export function TransactionList({
   isMatched,
   isFiltered,
   allowReorder = true,
+  autoClassificationById,
   dateFormat,
   hideFraction,
   renderEmpty,
@@ -775,6 +784,7 @@ export function TransactionList({
         onMakeAsNonSplitTransactions={onMakeAsNonSplitTransactions}
         showSelection={showSelection}
         allowSplitTransaction={allowSplitTransaction}
+        autoClassificationById={autoClassificationById}
       />
     </ErrorBoundary>
   );

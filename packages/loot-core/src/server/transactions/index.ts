@@ -225,6 +225,29 @@ export async function batchUpdateTransactions({
     );
   }
 
+  if (updated && updated.length > 0) {
+    const overridesToLearn: {
+      previous: TransactionEntity;
+      updated: TransactionEntity;
+    }[] = [];
+    for (const update of allUpdated) {
+      const prev = previousTransactionsById.get(update.id);
+      if (
+        prev &&
+        prev.categorization_source === 'ai' &&
+        update.category !== prev.category
+      ) {
+        overridesToLearn.push({ previous: prev, updated: update });
+      }
+    }
+
+    if (overridesToLearn.length > 0) {
+      const { learnClassificationOverrides } =
+        await import('#server/accounts/llm-classifier');
+      await learnClassificationOverrides(overridesToLearn);
+    }
+  }
+
   if (detectOrphanPayees) {
     // Look for any orphaned payees and notify the user about merging
     // them

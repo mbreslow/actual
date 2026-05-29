@@ -365,3 +365,11 @@ export type DbTag = {
   tombstone: 1 | 0;
   hidden?: 1 | 0;
 };
+
+export type DbAIClassificationMemory = {
+  id: string;
+  imported_payee: string | null;
+  payee_name: string | null;
+  category_id: string;
+  tombstone: 1 | 0;
+};

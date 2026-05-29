@@ -150,6 +150,14 @@ type LiveTransactionTableProps = {
   showCategory: boolean;
   showCleared: boolean;
   isAdding: boolean;
+  autoClassificationById?: Record<
+    string,
+    {
+      status: 'classifying' | 'classified' | 'fading';
+      category?: string;
+      transaction?: TransactionEntity;
+    }
+  >;
   onTransactionsChange?: (newTrans: TransactionEntity[]) => void;
   onCloseAddTransaction?: () => void;
 };
@@ -1409,6 +1417,40 @@ describe('Transactions', () => {
 
       // Verify the tag was added to the note correctly
       expect(getTransactions()[2].notes).toBe('spending on #coffee');
+    });
+
+    test('a classifying row shows the inline loading indicator in the category cell', () => {
+      const transactions = generateTransactions(1);
+      const { container } = renderTransactions({
+        transactions,
+        autoClassificationById: {
+          [transactions[0].id]: {
+            status: 'classifying',
+            transaction: transactions[0],
+          },
+        },
+      });
+
+      const cell = queryField(container, 'category', '', 0);
+      expect(cell.querySelector('svg')).toBeTruthy(); // AnimatedLoading icon is an SVG
+    });
+
+    test('a classified row displays the assigned category while still present', () => {
+      const transactions = generateTransactions(1);
+      const assignedCategoryId = usualGroup.categories?.[0].id; // Food
+      const { container } = renderTransactions({
+        transactions,
+        autoClassificationById: {
+          [transactions[0].id]: {
+            status: 'classified',
+            category: assignedCategoryId,
+            transaction: transactions[0],
+          },
+        },
+      });
+
+      const cell = queryField(container, 'category', 'div', 0);
+      expect(cell.textContent).toBe('Food');
     });
   });
 });

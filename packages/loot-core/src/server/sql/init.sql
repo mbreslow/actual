@@ -41,9 +41,6 @@ CREATE TABLE transactions
    isChild INTEGER DEFAULT 0,
    acct TEXT,
    category TEXT,
-   categorization_source TEXT,
-   categorization_date INTEGER,
-   categorization_note TEXT,
    amount INTEGER,
    description TEXT,
    notes TEXT,
@@ -57,6 +54,7 @@ CREATE TABLE transactions
    transferred_id TEXT,
    sort_order REAL,
    tombstone INTEGER DEFAULT 0);
+
 
 CREATE TABLE categories
  (id TEXT PRIMARY KEY,
@@ -89,3 +87,5 @@ CREATE TABLE messages_clock (id INTEGER PRIMARY KEY, clock TEXT);
 
 CREATE TABLE db_version (version TEXT PRIMARY KEY);
 CREATE TABLE __migrations__ (id INT PRIMARY KEY NOT NULL);
+
+
