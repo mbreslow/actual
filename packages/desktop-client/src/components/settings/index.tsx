@@ -8,6 +8,7 @@ import { Input } from '@actual-app/components/input';
 import { Select } from '@actual-app/components/select';
 import { Text } from '@actual-app/components/text';
 import { theme } from '@actual-app/components/theme';
+import { Toggle } from '@actual-app/components/toggle';
 import { tokens } from '@actual-app/components/tokens';
 import { View } from '@actual-app/components/view';
 import { listen, send } from '@actual-app/core/platform/client/connection';
@@ -605,6 +606,73 @@ function LLMClassificationSettings() {
   );
 }
 
+function LLMClassificationToggle() {
+  const [enabled, setEnabled] = useSyncedPref('llmClassificationEnabled');
+  const isEnabled = enabled === 'true';
+
+  return (
+    <Setting>
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 15,
+          width: '100%',
+        }}
+      >
+        <View style={{ gap: 5, flex: 1 }}>
+          <Text style={{ fontWeight: 600 }}>
+            <label htmlFor="settings-llmClassificationEnabled">
+              <Trans>Auto-categorize transactions with LLM</Trans>
+            </label>
+          </Text>
+          <Text style={{ color: theme.pageTextSubdued, lineHeight: 1.4 }}>
+            <Trans>
+              Enable LLM transaction categorization for this budget. Bank sync
+              account settings still control which accounts use it.
+            </Trans>
+          </Text>
+        </View>
+        <Toggle
+          id="settings-llmClassificationEnabled"
+          isOn={isEnabled}
+          onToggle={value => setEnabled(value ? 'true' : 'false')}
+        />
+      </View>
+    </Setting>
+  );
+}
+
+function ClassificationHintsSettingsLink() {
+  return (
+    <Setting>
+      <Text>
+        <Trans>
+          <strong>Classification hints</strong> describe how your budget
+          categories should be interpreted when transactions are categorized.
+        </Trans>
+      </Text>
+      <Link variant="button" buttonVariant="normal" to="/classification-hints">
+        <Trans>Edit classification hints</Trans>
+      </Link>
+    </Setting>
+  );
+}
+
+function DisabledLLMClassificationNotice() {
+  return (
+    <Setting>
+      <Text style={{ color: theme.pageTextSubdued, lineHeight: 1.4 }}>
+        <Trans>
+          LLM model configuration and classification hints are available after
+          auto-categorization is enabled.
+        </Trans>
+      </Text>
+    </Setting>
+  );
+}
+
 export function Settings() {
   const { t } = useTranslation();
   const [floatingSidebar] = useGlobalPref('floatingSidebar');
@@ -612,6 +680,8 @@ export function Settings() {
   const dispatch = useDispatch();
   const isCurrencyExperimentalEnabled = useFeatureFlag('currency');
   const [_, setDefaultCurrencyCodePref] = useSyncedPref('defaultCurrencyCode');
+  const [llmClassificationEnabled] = useSyncedPref('llmClassificationEnabled');
+  const isLLMClassificationEnabled = llmClassificationEnabled === 'true';
 
   const onCloseBudget = () => {
     void dispatch(closeBudget());
@@ -683,7 +753,15 @@ export function Settings() {
         <AuthSettings />
         <EncryptionSettings />
         <BudgetTypeSettings />
-        <LLMClassificationSettings />
+        <LLMClassificationToggle />
+        {isLLMClassificationEnabled ? (
+          <>
+            <LLMClassificationSettings />
+            <ClassificationHintsSettingsLink />
+          </>
+        ) : (
+          <DisabledLLMClassificationNotice />
+        )}
         {isElectron() && <Backups />}
         <ExportBudget />
         <AdvancedToggle>

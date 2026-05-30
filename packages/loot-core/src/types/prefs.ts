@@ -67,6 +67,8 @@ export type SyncedPrefs = Partial<
     | `csv-out-value-${string}`
     | `csv-has-header-${string}`
     | `custom-sync-mappings-${string}`
+    | 'llmClassificationEnabled'
+    | 'llmClassificationHints'
     | `sync-import-pending-${string}`
     | `sync-reimport-deleted-${string}`
     | `sync-import-notes-${string}`

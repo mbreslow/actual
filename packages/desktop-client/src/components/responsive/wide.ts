@@ -10,6 +10,7 @@ export { Account } from '#components/accounts/Account';
 
 export { ManageRulesPage as Rules } from '#components/ManageRulesPage';
 export { ManageRulesPage as RuleEdit } from '#components/ManageRulesPage';
+export { ClassificationHintsPage as ClassificationHints } from '#components/ClassificationHintsPage';
 export { ManagePayeesPage as Payees } from '#components/payees/ManagePayeesPage';
 export { ManagePayeesPage as PayeeEdit } from '#components/payees/ManagePayeesPage';
 

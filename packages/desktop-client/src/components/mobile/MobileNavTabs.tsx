@@ -9,6 +9,7 @@ import {
   SvgAdd,
   SvgCog,
   SvgCreditCard,
+  SvgLightBulb,
   SvgPiggyBank,
   SvgReports,
   SvgStoreFront,
@@ -134,6 +135,12 @@ export function MobileNavTabs() {
       path: '/rules',
       style: navTabStyle,
       Icon: SvgTuning,
+    },
+    {
+      name: t('Hints'),
+      path: '/classification-hints',
+      style: navTabStyle,
+      Icon: SvgLightBulb,
     },
     ...(isUsingServer
       ? [

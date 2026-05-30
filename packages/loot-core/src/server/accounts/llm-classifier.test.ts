@@ -34,12 +34,25 @@ let getProviderRequest: (params: {
   userPrompt: string;
   categoryIds: string[];
 }) => { url: string; body: unknown };
+let getSystemPrompt: (
+  categories: Array<{
+    id: string;
+    name: string;
+    groupName: string;
+    hints: string;
+  }>,
+) => string;
+let parseClassificationHints: (
+  raw: string | null | undefined,
+) => Record<string, string>;
 
 describe('LLM bank sync classifier', () => {
   beforeAll(async () => {
     const classifier = await import('./llm-classifier');
     parseClassifications = classifier.parseClassifications;
     getProviderRequest = classifier.getProviderRequest;
+    getSystemPrompt = classifier.getSystemPrompt;
+    parseClassificationHints = classifier.parseClassificationHints;
   });
 
   test('parses valid classifications and clamps confidence', () => {
@@ -143,5 +156,45 @@ describe('LLM bank sync classifier', () => {
     });
 
     expect(JSON.stringify(request.body)).not.toContain('additionalProperties');
+  });
+
+  test('includes category hints in the system prompt', () => {
+    const prompt = getSystemPrompt([
+      {
+        id: 'flexible',
+        name: 'Flexible Spending',
+        groupName: 'Usual Expenses',
+        hints: 'movies, entertainment, activities',
+      },
+      {
+        id: 'dining',
+        name: 'Dining Out',
+        groupName: 'Usual Expenses',
+        hints: '',
+      },
+    ]);
+
+    expect(prompt).toContain('"hints":"movies, entertainment, activities"');
+    expect(prompt).toContain('"hints":""');
+    expect(prompt).toContain(
+      'Prefer these hints over generic merchant assumptions',
+    );
+  });
+
+  test('parses classification hints and ignores invalid values', () => {
+    expect(
+      parseClassificationHints(
+        JSON.stringify({
+          flexible: 'movies, entertainment, activities',
+          dining: '',
+          invalid: 123,
+        }),
+      ),
+    ).toEqual({
+      flexible: 'movies, entertainment, activities',
+      dining: '',
+    });
+    expect(parseClassificationHints('not json')).toEqual({});
+    expect(parseClassificationHints(JSON.stringify(['movies']))).toEqual({});
   });
 });

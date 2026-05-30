@@ -13,6 +13,7 @@ type CategoryForPrompt = {
   id: string;
   name: string;
   groupName: string;
+  hints: string;
 };
 
 type TransactionForPrompt = {
@@ -128,10 +129,44 @@ async function getEnabled(accountId: string): Promise<boolean> {
   return String(row?.value ?? 'false') === 'true';
 }
 
+async function getGloballyEnabled(): Promise<boolean> {
+  const db = await import('#server/db');
+  const row = await db.first<{ value?: string | null }>(
+    'SELECT value FROM preferences WHERE id = ?',
+    ['llmClassificationEnabled'],
+  );
+
+  return String(row?.value ?? 'false') === 'true';
+}
+
+export function parseClassificationHints(raw: string | null | undefined) {
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed) || Array.isArray(parsed)) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter(
+          (entry): entry is [string, string] => typeof entry[1] === 'string',
+        )
+        .map(([categoryId, hints]) => [categoryId, hints.trim()]),
+    );
+  } catch {
+    return {};
+  }
+}
+
 async function getCategories(): Promise<CategoryForPrompt[]> {
   const db = await import('#server/db');
-  return db.all<CategoryForPrompt>(
-    `SELECT c.id, c.name, cg.name AS groupName
+  const [categories, hintsRow] = await Promise.all([
+    db.all<Omit<CategoryForPrompt, 'hints'>>(
+      `SELECT c.id, c.name, cg.name AS groupName
        FROM categories c
        JOIN category_groups cg ON cg.id = c.cat_group
       WHERE c.tombstone = 0
@@ -139,13 +174,24 @@ async function getCategories(): Promise<CategoryForPrompt[]> {
         AND cg.tombstone = 0
         AND cg.hidden = 0
       ORDER BY cg.is_income, cg.sort_order, c.sort_order, c.id`,
-  );
+    ),
+    db.first<{ value?: string | null }>(
+      'SELECT value FROM preferences WHERE id = ?',
+      ['llmClassificationHints'],
+    ),
+  ]);
+  const hintsByCategory = parseClassificationHints(hintsRow?.value);
+
+  return categories.map(category => ({
+    ...category,
+    hints: hintsByCategory[category.id] || '',
+  }));
 }
 
-function getSystemPrompt(categories: CategoryForPrompt[]): string {
+export function getSystemPrompt(categories: CategoryForPrompt[]): string {
   return `You classify personal bank transactions into exactly one allowed Actual Budget category.
 
-Allowed categories are JSON objects with id, name, and groupName:
+Allowed categories are JSON objects with id, name, groupName, and hints:
 ${JSON.stringify(categories)}
 
 Rules:
@@ -154,6 +200,7 @@ Rules:
 - categoryId must be exactly one allowed category id.
 - confidence must be a number from 0 to 1.
 - reason must be brief and based only on payee, imported payee, notes, amount, date, and account.
+- hints are user-provided descriptions of what each category means in this budget. Prefer these hints over generic merchant assumptions when they are relevant.
 - Classify refunds or credits by the underlying merchant/category, not by the sign of the amount.
 - When uncertain, choose the closest allowed category and lower the confidence.`;
 }
@@ -716,8 +763,11 @@ export async function classifyBankSyncTransactions(
   accountId: string,
   targets: TransactionClassificationTarget[],
 ): Promise<void> {
-  const enabled = await getEnabled(accountId);
-  if (!enabled) {
+  const [globalEnabled, accountEnabled] = await Promise.all([
+    getGloballyEnabled(),
+    getEnabled(accountId),
+  ]);
+  if (!globalEnabled || !accountEnabled) {
     return;
   }
 
@@ -797,6 +847,11 @@ export async function classifyExistingUncategorizedTransactions({
     >
   >;
 }> {
+  const enabled = await getGloballyEnabled();
+  if (!enabled) {
+    throw new Error('LLM transaction categorization is disabled.');
+  }
+
   const config = await loadConfig();
   if (!isConfigured(config)) {
     throw new Error('LLM transaction categorization is not configured.');

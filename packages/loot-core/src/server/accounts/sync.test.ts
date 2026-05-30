@@ -87,6 +87,10 @@ describe('Account sync', () => {
       provider: 'ollama',
       model: 'test-model',
     });
+    await db.update('preferences', {
+      id: `sync-llm-classify-${acctId}` satisfies keyof SyncedPrefs,
+      value: 'true',
+    });
 
     await reconcileTransactions(
       acctId,
@@ -96,6 +100,39 @@ describe('Account sync', () => {
           payeeName: 'Kroger',
           transactionAmount: { amount: '-12.34' },
           transactionId: 'llm-disabled',
+          booked: true,
+        },
+      ],
+      true,
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockRestore();
+  });
+
+  test('bank sync LLM categorization still requires account enablement', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}'));
+    const { id: acctId } = await prepareDatabase();
+
+    await db.update('preferences', {
+      id: 'llmClassificationEnabled' satisfies keyof SyncedPrefs,
+      value: 'true',
+    });
+    await asyncStorage.setItem('llmClassificationConfig', {
+      provider: 'ollama',
+      model: 'test-model',
+    });
+
+    await reconcileTransactions(
+      acctId,
+      [
+        {
+          date: '2020-01-02',
+          payeeName: 'Kroger',
+          transactionAmount: { amount: '-12.34' },
+          transactionId: 'llm-account-disabled',
           booked: true,
         },
       ],
@@ -128,6 +165,10 @@ describe('Account sync', () => {
 
     await db.update('preferences', {
       id: `sync-llm-classify-${acctId}` satisfies keyof SyncedPrefs,
+      value: 'true',
+    });
+    await db.update('preferences', {
+      id: 'llmClassificationEnabled' satisfies keyof SyncedPrefs,
       value: 'true',
     });
     await asyncStorage.setItem('llmClassificationConfig', {

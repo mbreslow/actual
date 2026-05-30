@@ -8,7 +8,10 @@ import { loadMappings } from '#server/db/mappings';
 import { batchUpdateTransactions } from '#server/transactions';
 import { loadRules } from '#server/transactions/transaction-rules';
 
-import { classifyExistingUncategorizedTransactions } from './llm-classifier';
+import {
+  classifyBankSyncTransactions,
+  classifyExistingUncategorizedTransactions,
+} from './llm-classifier';
 
 vi.hoisted(() => {
   Object.defineProperty(globalThis, 'navigator', {
@@ -102,6 +105,10 @@ describe('LLM Classifier Memory', () => {
     });
 
     // 4. Set up mock config for LLM Classification so we can run classification
+    await db.update('preferences', {
+      id: 'llmClassificationEnabled',
+      value: 'true',
+    });
     vi.mocked(asyncStorage.getItem).mockResolvedValue({
       provider: 'ollama',
       model: 'test-model',
@@ -137,6 +144,62 @@ describe('LLM Classifier Memory', () => {
     expect(classifiedTx.categorization_note).toBe(
       'Classified based on previous user correction',
     );
+
+    fetchMock.mockRestore();
+  });
+
+  test('manual uncategorized classification requires the global setting', async () => {
+    const { accountId, payeeId } = await prepareDatabase();
+    const txId = await db.insertTransaction({
+      account: accountId,
+      amount: -1234,
+      date: '2020-01-01',
+      payee: payeeId,
+      imported_payee: 'KROGER STORE 123',
+      category: null,
+    });
+
+    await expect(
+      classifyExistingUncategorizedTransactions({ ids: [txId] }),
+    ).rejects.toThrow('LLM transaction categorization is disabled.');
+  });
+
+  test('bank sync classification requires global and account enablement', async () => {
+    const { accountId, payeeId } = await prepareDatabase();
+    vi.mocked(asyncStorage.getItem).mockResolvedValue({
+      provider: 'ollama',
+      model: 'test-model',
+    });
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({})));
+
+    const trans = {
+      id: 'tx1',
+      account: accountId,
+      amount: -1234,
+      date: '2020-01-01',
+      payee: payeeId,
+      imported_payee: 'KROGER STORE 123',
+    };
+
+    await db.update('preferences', {
+      id: `sync-llm-classify-${accountId}`,
+      value: 'true',
+    });
+    await classifyBankSyncTransactions(accountId, [{ trans }]);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await db.update('preferences', {
+      id: 'llmClassificationEnabled',
+      value: 'true',
+    });
+    await db.update('preferences', {
+      id: `sync-llm-classify-${accountId}`,
+      value: 'false',
+    });
+    await classifyBankSyncTransactions(accountId, [{ trans }]);
+    expect(fetchMock).not.toHaveBeenCalled();
 
     fetchMock.mockRestore();
   });

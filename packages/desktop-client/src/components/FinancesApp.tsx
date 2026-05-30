@@ -314,6 +314,10 @@ export function FinancesApp() {
                     }
                   />
                   <Route
+                    path="/classification-hints"
+                    element={<NarrowAlternate name="ClassificationHints" />}
+                  />
+                  <Route
                     path="/bank-sync"
                     element={<NarrowAlternate name="BankSync" />}
                   />
@@ -407,6 +411,10 @@ export function FinancesApp() {
                 />
                 <Route path="/bank-sync" element={<MobileNavTabs />} />
                 <Route path="/rules" element={<MobileNavTabs />} />
+                <Route
+                  path="/classification-hints"
+                  element={<MobileNavTabs />}
+                />
                 <Route path="/payees" element={<MobileNavTabs />} />
                 <Route path="/schedules" element={<MobileNavTabs />} />
                 <Route path="*" element={null} />
