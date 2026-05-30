@@ -125,4 +125,23 @@ describe('LLM bank sync classifier', () => {
     );
     expect(JSON.stringify(request.body)).toContain('cat-food');
   });
+
+  test('omits unsupported additionalProperties fields from Google response schema', () => {
+    const request = getProviderRequest({
+      config: {
+        provider: 'google',
+        endpoint: 'https://generativelanguage.googleapis.com/v1beta',
+        apiKey: 'key',
+        model: 'gemini-flash-lite-latest',
+        vertexProjectId: '',
+        vertexLocation: '',
+        bedrockRegion: '',
+      },
+      systemPrompt: 'system',
+      userPrompt: 'user',
+      categoryIds: ['cat-food'],
+    });
+
+    expect(JSON.stringify(request.body)).not.toContain('additionalProperties');
+  });
 });

@@ -1,4 +1,5 @@
 import type { QueryState } from '#shared/query';
+import type { LLMClassificationProvider } from '#types/prefs';
 
 export type ServerHandlers = {
   undo: () => Promise<void>;
@@ -24,4 +25,10 @@ export type ServerHandlers = {
   }) => Promise<{ error?: string }>;
 
   'app-focused': () => Promise<void>;
+
+  'llm-fetch-models': (arg: {
+    provider: LLMClassificationProvider;
+    apiKey?: string;
+    endpoint?: string;
+  }) => Promise<string[]>;
 };

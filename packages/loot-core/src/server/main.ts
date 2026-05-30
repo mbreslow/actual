@@ -1,6 +1,7 @@
 // @ts-strict-ignore
 import * as asyncStorage from '#platform/server/asyncStorage';
 import * as connection from '#platform/server/connection';
+import { fetch } from '#platform/server/fetch';
 import * as fs from '#platform/server/fs';
 import { logger, setVerboseMode } from '#platform/server/log';
 import * as sqlite from '#platform/server/sqlite';
@@ -9,6 +10,7 @@ import { amountToInteger, integerToAmount } from '#shared/util';
 import type { Handlers } from '#types/handlers';
 
 import { app as accountsApp } from './accounts/app';
+import { getProviderModels } from './accounts/llm-models';
 import { app as adminApp } from './admin/app';
 import { installAPI } from './api';
 import { aqlQuery } from './aql';
@@ -120,6 +122,106 @@ handlers['app-focused'] = async function () {
     // First we sync
     void fullSync();
   }
+};
+
+handlers['llm-fetch-models'] = async function ({ provider, apiKey, endpoint }) {
+  const server = getServer();
+  const isOllama = provider === 'ollama';
+
+  logger.log('[LLM models] Fetching provider model list', {
+    provider,
+    endpoint,
+    hasApiKey: Boolean(apiKey),
+    viaProxy: Boolean(server && !isOllama),
+  });
+
+  const models = await getProviderModels({
+    provider,
+    apiKey,
+    endpoint,
+    fetchJson: async (
+      targetUrl: string,
+      method: 'GET',
+      customHeaders: Record<string, string> = {},
+    ): Promise<unknown> => {
+      logger.log('[LLM models] Request', {
+        provider,
+        targetUrl,
+        method,
+        headerNames: Object.keys(customHeaders),
+      });
+
+      if (server && !isOllama) {
+        const userToken = await asyncStorage.getItem('user-token');
+        const proxyUrl = `${server.BASE_SERVER}/llm-proxy`;
+        const response = await fetch(proxyUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-ACTUAL-TOKEN': userToken || '',
+          },
+          body: JSON.stringify({
+            url: targetUrl,
+            method,
+            headers: customHeaders,
+          }),
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          logger.warn('[LLM models] Proxy error response', {
+            provider,
+            targetUrl,
+            status: response.status,
+            body: text.slice(0, 2000),
+          });
+          throw new Error(`Proxy error ${response.status}: ${text}`);
+        }
+
+        const json = await response.json();
+        logger.log('[LLM models] Proxy response body', {
+          provider,
+          targetUrl,
+          body: json,
+        });
+        return json;
+      } else {
+        const response = await fetch(targetUrl, {
+          method,
+          headers: {
+            ...customHeaders,
+          },
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          logger.warn('[LLM models] Direct error response', {
+            provider,
+            targetUrl,
+            status: response.status,
+            body: text.slice(0, 2000),
+          });
+          throw new Error(`Direct API returned ${response.status}: ${text}`);
+        }
+
+        const json = await response.json();
+        logger.log('[LLM models] Direct response body', {
+          provider,
+          targetUrl,
+          body: json,
+        });
+        return json;
+      }
+    },
+  });
+
+  logger.log('[LLM models] Parsed provider models', {
+    provider,
+    count: models.length,
+    models,
+  });
+
+  return models;
 };
 
 handlers = installAPI(handlers) as Handlers;

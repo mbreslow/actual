@@ -26,6 +26,7 @@ export type LLMClassificationConfig = Partial<{
   model: string;
   endpoint: string;
   apiKey: string;
+  apiKeys?: Record<string, string>;
   timeoutMs: number;
   batchSize: number;
   vertexProjectId: string;

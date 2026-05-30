@@ -19,8 +19,44 @@ import * as secretApp from './app-secrets';
 import * as simpleFinApp from './app-simplefin/app-simplefin';
 import * as syncApp from './app-sync';
 import { config } from './load-config';
+import { validateSession } from './util/validate-user';
 
 const app = express();
+
+function redactHeaders(headers: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [
+      key,
+      /authorization|api-key|token/i.test(key) ? '[redacted]' : value,
+    ]),
+  );
+}
+
+function summarizeProxyBody(text: string, contentType: string) {
+  if (!contentType.includes('application/json')) {
+    return text.slice(0, 2000);
+  }
+
+  try {
+    const json = JSON.parse(text) as unknown;
+    if (json && typeof json === 'object') {
+      const record = json as Record<string, unknown>;
+      const summary: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(record)) {
+        summary[key] = Array.isArray(value)
+          ? {
+              length: value.length,
+              first: value[0],
+            }
+          : value;
+      }
+      return summary;
+    }
+    return json;
+  } catch {
+    return text.slice(0, 2000);
+  }
+}
 
 process.on('unhandledRejection', reason => {
   console.log('Rejection:', reason);
@@ -64,6 +100,76 @@ app.use('/pluggyai', pluggai.handlers);
 app.use('/akahu', akahuApp.handlers);
 app.use('/enablebanking', enableBankingApp.handlers);
 app.use('/secret', secretApp.handlers);
+
+app.post('/llm-proxy', async (req, res) => {
+  const session = await validateSession(req, res);
+  if (!session) {
+    return; // validateSession already sent the response
+  }
+
+  const { url, method = 'POST', headers = {}, body } = req.body || {};
+  if (!url) {
+    return res.status(400).json({ error: 'Missing url parameter' });
+  }
+
+  // prevent exploits
+  const allowedHosts = new Set([
+    'api.openai.com',
+    'api.anthropic.com',
+    'generativelanguage.googleapis.com',
+  ]);
+
+  const parsedUrl = new URL(url);
+  const isAllowedLocalOllama =
+    ['localhost', '127.0.0.1'].includes(parsedUrl.hostname) &&
+    parsedUrl.port === '11434' &&
+    parsedUrl.protocol === 'http:';
+ 
+  if (!allowedHosts.has(parsedUrl.hostname) && !isAllowedLocalOllama) {
+    return res.status(400).json({ error: 'Unsupported LLM provider URL' });
+  }
+
+  try {
+    console.log('[LLM proxy] request', {
+      method,
+      url,
+      headers: redactHeaders(headers),
+      hasBody: Boolean(body),
+    });
+
+    const response = await fetch(url, {
+      method,
+      headers: {
+        ...headers,
+        'Content-Type': 'application/json',
+      },
+      ...(body && { body: JSON.stringify(body) }),
+    });
+
+    const contentType = response.headers.get('content-type') || '';
+    const text = await response.text();
+
+    console.log('[LLM proxy] response', {
+      method,
+      url,
+      status: response.status,
+      contentType,
+      body: summarizeProxyBody(text, contentType),
+    });
+
+    res.status(response.status);
+
+    if (contentType.includes('application/json')) {
+      res.type(contentType).send(text);
+    } else {
+      res.send(text);
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.log('[LLM proxy] error', { method, url, message });
+    res.status(500).json({ error: 'Error proxying request', details: message });
+  }
+});
 
 if (config.get('corsProxy.enabled')) {
   app.use('/cors-proxy', corsApp.handlers);

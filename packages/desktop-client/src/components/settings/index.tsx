@@ -10,7 +10,7 @@ import { Text } from '@actual-app/components/text';
 import { theme } from '@actual-app/components/theme';
 import { tokens } from '@actual-app/components/tokens';
 import { View } from '@actual-app/components/view';
-import { listen } from '@actual-app/core/platform/client/connection';
+import { listen, send } from '@actual-app/core/platform/client/connection';
 import { isElectron } from '@actual-app/core/shared/environment';
 import type {
   LLMClassificationConfig,
@@ -176,46 +176,69 @@ const llmProviderOptions: Array<[LLMClassificationProvider, string]> = [
   ['openai', 'OpenAI'],
   ['anthropic', 'Anthropic'],
   ['google', 'Google Gemini'],
-  ['googleVertex', 'Google Vertex AI'],
-  ['amazonBedrock', 'Amazon Bedrock'],
 ];
 
 const llmProviderDefaults = {
   ollama: {
-    model: 'llama3.1',
     endpoint: 'http://127.0.0.1:11434/api/chat',
   },
   openai: {
-    model: 'gpt-4o-mini',
     endpoint: 'https://api.openai.com/v1/chat/completions',
   },
   anthropic: {
-    model: 'claude-3-5-haiku-latest',
     endpoint: 'https://api.anthropic.com/v1/messages',
   },
   google: {
-    model: 'gemini-2.5-flash',
     endpoint: 'https://generativelanguage.googleapis.com/v1beta',
   },
   googleVertex: {
-    model: 'gemini-2.5-flash',
     endpoint: 'https://aiplatform.googleapis.com/v1',
   },
   amazonBedrock: {
-    model: 'us.anthropic.claude-sonnet-4-6',
     endpoint: 'https://bedrock-runtime.{region}.amazonaws.com',
   },
 } satisfies Record<
   LLMClassificationProvider,
-  Pick<LLMClassificationConfig, 'model' | 'endpoint'>
+  Pick<LLMClassificationConfig, 'endpoint'>
 >;
 
 const defaultLLMConfig = {
   provider: 'ollama',
   ...llmProviderDefaults.ollama,
+  model: '',
   timeoutMs: 180000,
   batchSize: 12,
 } satisfies LLMClassificationConfig;
+
+function getErrorMessage(err: unknown): string {
+  if (typeof err === 'string') {
+    return err;
+  }
+
+  if (err && typeof err === 'object') {
+    if ('message' in err && typeof err.message === 'string') {
+      return err.message;
+    }
+    if ('details' in err && typeof err.details === 'string') {
+      return err.details;
+    }
+  }
+
+  return 'Unknown error';
+}
+
+function getModelFromFetchedModels(
+  currentModel: string | undefined,
+  models: string[],
+): string {
+  if (models.length === 0) {
+    return '';
+  }
+
+  return currentModel && models.includes(currentModel)
+    ? currentModel
+    : models[0];
+}
 
 function LLMClassificationSettings() {
   const { t } = useTranslation();
@@ -224,17 +247,111 @@ function LLMClassificationSettings() {
   );
   const [config, setConfig] =
     useState<LLMClassificationConfig>(defaultLLMConfig);
-
-  useEffect(() => {
-    setConfig({ ...defaultLLMConfig, ...savedConfig });
-  }, [savedConfig]);
+  const [fetchedModels, setFetchedModels] = useState<string[]>([]);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [debouncedApiKey, setDebouncedApiKey] = useState(config.apiKey || '');
 
   const updateConfig = <Key extends keyof LLMClassificationConfig>(
     key: Key,
     value: LLMClassificationConfig[Key],
   ) => {
-    setConfig(current => ({ ...current, [key]: value }));
+    setConfig(current => {
+      const updated = { ...current, [key]: value };
+      if (key === 'apiKey' && typeof value === 'string') {
+        const provider = current.provider || 'ollama';
+        const apiKeys = {
+          ...(current.apiKeys || {}),
+          [provider]: value,
+        };
+        updated.apiKeys = apiKeys;
+      }
+      return updated;
+    });
   };
+
+  useEffect(() => {
+    if (savedConfig) {
+      const provider = savedConfig.provider || 'ollama';
+      const existingApiKey =
+        savedConfig.apiKey || savedConfig.apiKeys?.[provider] || '';
+      const apiKeys = {
+        ...(savedConfig.apiKeys || {}),
+        [provider]: existingApiKey,
+      };
+      setConfig({
+        ...defaultLLMConfig,
+        ...savedConfig,
+        apiKey: existingApiKey,
+        apiKeys,
+      });
+    } else {
+      setConfig(defaultLLMConfig);
+    }
+  }, [savedConfig]);
+
+  // Debounce API key typing by 800ms
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedApiKey(config.apiKey || '');
+    }, 800);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [config.apiKey]);
+
+  useEffect(() => {
+    let active = true;
+    const provider = config.provider || 'ollama';
+    const isFetchable = ['ollama', 'openai', 'anthropic', 'google'].includes(
+      provider,
+    );
+    const hasKey = provider === 'ollama' || !!debouncedApiKey;
+
+    if (!isFetchable || !hasKey) {
+      setFetchedModels([]);
+      setIsLoadingModels(false);
+      setFetchError(null);
+      setConfig(current => ({ ...current, model: '' }));
+      return;
+    }
+
+    async function fetchModels() {
+      setIsLoadingModels(true);
+      setFetchError(null);
+      try {
+        const models = await send('llm-fetch-models', {
+          provider,
+          apiKey: debouncedApiKey,
+          endpoint: config.endpoint,
+        });
+        if (active) {
+          setFetchedModels(models);
+          setConfig(current => ({
+            ...current,
+            model: getModelFromFetchedModels(current.model, models),
+          }));
+        }
+      } catch (err) {
+        if (active) {
+          setFetchedModels([]);
+          setConfig(current => ({ ...current, model: '' }));
+          setFetchError(getErrorMessage(err));
+        }
+      } finally {
+        if (active) {
+          setIsLoadingModels(false);
+        }
+      }
+    }
+
+    void fetchModels();
+
+    return () => {
+      active = false;
+    };
+  }, [config.provider, debouncedApiKey, config.endpoint]);
 
   const saveConfig = () => {
     setSavedConfig({
@@ -245,13 +362,51 @@ function LLMClassificationSettings() {
   };
 
   const provider = config.provider || 'ollama';
+  const fetchableProviders: LLMClassificationProvider[] = [
+    'ollama',
+    'openai',
+    'anthropic',
+    'google',
+  ];
+  const isFetchableProvider = fetchableProviders.includes(provider);
   const requiresApiKey = provider !== 'ollama';
+  const hasKey = provider === 'ollama' || !!config.apiKey;
+  const isMissingKey = isFetchableProvider && requiresApiKey && !config.apiKey;
+  const hasNoModels =
+    isFetchableProvider &&
+    hasKey &&
+    !isLoadingModels &&
+    !fetchError &&
+    fetchedModels.length === 0;
+  const modelOptions = fetchedModels.map(m => [m, m] as [string, string]);
+  const isModelRequired = isFetchableProvider;
+  const isSaveDisabled = isModelRequired && !config.model;
+  const modelPlaceholder = isMissingKey
+    ? t('Enter an API key to load models')
+    : isLoadingModels
+      ? t('Loading models...')
+      : fetchError
+        ? t('Unable to load models')
+        : hasNoModels
+          ? t('No models returned')
+          : t('Select a model');
+
   const updateProvider = (value: LLMClassificationProvider) => {
-    setConfig(current => ({
-      ...current,
-      ...llmProviderDefaults[value],
-      provider: value,
-    }));
+    setConfig(current => {
+      const apiKeys = current.apiKeys || {};
+      const newApiKey = apiKeys[value] || '';
+      setDebouncedApiKey(newApiKey);
+      setFetchedModels([]);
+      setFetchError(null);
+      setIsLoadingModels(false);
+      return {
+        ...current,
+        ...llmProviderDefaults[value],
+        provider: value,
+        apiKey: newApiKey,
+        model: '',
+      };
+    });
   };
 
   return (
@@ -274,29 +429,6 @@ function LLMClassificationSettings() {
             style={{ width: '100%' }}
           />
         </FormField>
-        <FormField>
-          <FormLabel title={t('Model')} htmlFor="settings-llmModel" />
-          <Input
-            id="settings-llmModel"
-            value={config.model || ''}
-            onChangeValue={value => updateConfig('model', value)}
-            placeholder={t('Model name')}
-            style={{ width: '100%' }}
-          />
-        </FormField>
-        <FormField>
-          <FormLabel
-            title={t('Endpoint or base URL')}
-            htmlFor="settings-llmEndpoint"
-          />
-          <Input
-            id="settings-llmEndpoint"
-            value={config.endpoint || ''}
-            onChangeValue={value => updateConfig('endpoint', value)}
-            placeholder={t('Provider default')}
-            style={{ width: '100%' }}
-          />
-        </FormField>
         {requiresApiKey && (
           <FormField>
             <FormLabel title={t('API key')} htmlFor="settings-llmApiKey" />
@@ -310,6 +442,68 @@ function LLMClassificationSettings() {
             />
           </FormField>
         )}
+        <FormField>
+          <FormLabel
+            title={
+              t('Model') + (isLoadingModels ? ` (${t('loading...')})` : '')
+            }
+            htmlFor="settings-llmModel"
+          />
+          {isFetchableProvider ? (
+            <Select
+              id="settings-llmModel"
+              options={modelOptions}
+              value={config.model || ''}
+              onChange={value => updateConfig('model', value)}
+              disabled={isModelRequired && modelOptions.length === 0}
+              defaultLabel={modelPlaceholder}
+              style={{ width: '100%' }}
+            />
+          ) : (
+            <Input
+              id="settings-llmModel"
+              value={config.model || ''}
+              onChangeValue={value => updateConfig('model', value)}
+              placeholder={t('Model name')}
+              style={{ width: '100%' }}
+            />
+          )}
+        </FormField>
+        {fetchError && (
+          <Text
+            style={{
+              color: theme.warningText,
+              backgroundColor: theme.warningBackground,
+              border: `1px solid ${theme.warningBorder}`,
+              borderRadius: 4,
+              padding: '10px 12px',
+              fontSize: 13,
+              lineHeight: '1.4em',
+              marginTop: -5,
+              marginBottom: 5,
+            }}
+          >
+            <Trans>
+              <strong>Error Loading Models:</strong> {fetchError}. Please verify
+              your API key and connection. (Note: Running in a browser without a
+              sync server restricts direct cloud LLM requests due to CORS
+              security. Run the desktop app or connect to a sync server.)
+            </Trans>
+          </Text>
+        )}
+        <FormField>
+          <FormLabel
+            title={t('Endpoint or base URL')}
+            htmlFor="settings-llmEndpoint"
+          />
+          <Input
+            id="settings-llmEndpoint"
+            value={config.endpoint || ''}
+            onChangeValue={value => updateConfig('endpoint', value)}
+            placeholder={t('Provider default')}
+            style={{ width: '100%' }}
+          />
+        </FormField>
         {provider === 'googleVertex' && (
           <>
             <FormField>
@@ -399,7 +593,11 @@ function LLMClassificationSettings() {
             budget file.
           </Trans>
         </Text>
-        <Button variant="primary" onPress={saveConfig}>
+        <Button
+          variant="primary"
+          onPress={saveConfig}
+          isDisabled={isSaveDisabled}
+        >
           <Trans>Save LLM settings</Trans>
         </Button>
       </View>
@@ -485,11 +683,11 @@ export function Settings() {
         <AuthSettings />
         <EncryptionSettings />
         <BudgetTypeSettings />
+        <LLMClassificationSettings />
         {isElectron() && <Backups />}
         <ExportBudget />
         <AdvancedToggle>
           <AdvancedAbout />
-          <LLMClassificationSettings />
           <ResetCache />
           <ResetSync />
           <RepairTransactions />

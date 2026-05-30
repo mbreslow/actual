@@ -4,7 +4,11 @@ import { ErrorBoundary } from 'react-error-boundary';
 import { Trans } from 'react-i18next';
 import { Navigate, useLocation, useParams } from 'react-router';
 
+import { Button } from '@actual-app/components/button';
+import { AnimatedLoading } from '@actual-app/components/icons/AnimatedLoading';
+import { SvgDelete } from '@actual-app/components/icons/v0';
 import { styles } from '@actual-app/components/styles';
+import { Text } from '@actual-app/components/text';
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
 import { listen, send } from '@actual-app/core/platform/client/connection';
@@ -23,7 +27,6 @@ import {
 } from '@actual-app/core/shared/transactions';
 import { applyChanges, integerToCurrency } from '@actual-app/core/shared/util';
 import type { IntegerAmount } from '@actual-app/core/shared/util';
-import { format as formatDate, parseISO } from 'date-fns';
 import type {
   AccountEntity,
   CategoryGroupEntity,
@@ -34,15 +37,11 @@ import type {
   TransactionEntity,
   TransactionFilterEntity,
 } from '@actual-app/core/types/models';
+import { format as formatDate, parseISO } from 'date-fns';
 import { t } from 'i18next';
 import debounce from 'lodash/debounce';
 import isEqual from 'lodash/isEqual';
 import { v4 as uuidv4 } from 'uuid';
-
-import { Button } from '@actual-app/components/button';
-import { AnimatedLoading } from '@actual-app/components/icons/AnimatedLoading';
-import { SvgDelete } from '@actual-app/components/icons/v0';
-import { Text } from '@actual-app/components/text';
 
 import {
   useReopenAccountMutation,
@@ -79,10 +78,7 @@ import {
   replaceModal,
 } from '#modals/modalsSlice';
 import type { ConfirmTransactionEditReason } from '#modals/modalsSlice';
-import {
-  addNotification,
-  removeNotification,
-} from '#notifications/notificationsSlice';
+import { addNotification } from '#notifications/notificationsSlice';
 import { useCreatePayeeMutation } from '#payees';
 import * as queries from '#queries';
 import { aqlQuery } from '#queries/aqlQuery';
@@ -816,8 +812,10 @@ class AccountInternal extends PureComponent<
           if (res && res.updates && res.updates.length > 0) {
             const update = res.updates[0];
 
-            const payee = trans ? this.props.payees.find(p => p.id === trans.payee) : null;
-            const payeeName = payee ? payee.name : (trans?.imported_payee || '');
+            const payee = trans
+              ? this.props.payees.find(p => p.id === trans.payee)
+              : null;
+            const payeeName = payee ? payee.name : trans?.imported_payee || '';
             const category = this.props.categoryGroups
               .flatMap(g => g.categories)
               .find(c => c?.id === update.category);
@@ -882,14 +880,14 @@ class AccountInternal extends PureComponent<
               return { autoClassificationById: nextMap };
             });
           }
-        } catch (err: any) {
+        } catch (err) {
           this.setState(state => {
             const nextMap = { ...state.autoClassificationById };
             delete nextMap[id];
             return { autoClassificationById: nextMap };
           });
 
-          const errorMessage = err?.message || String(err);
+          const errorMessage = err instanceof Error ? err.message : String(err);
           const isConfigOrProviderError =
             errorMessage.includes('configured') ||
             errorMessage.includes('HTTP 40') ||
@@ -2381,7 +2379,14 @@ export function AutoClassificationToast({
           alignItems: 'center',
         }}
       >
-        <View style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <View
+          style={{
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
           <Text style={{ fontWeight: 700, fontSize: 14 }}>
             {autoClassifying ? (
               <Trans>Auto-classifying transactions...</Trans>
@@ -2426,11 +2431,27 @@ export function AutoClassificationToast({
                 opacity: 0.8,
               }}
             >
-              <th style={{ padding: '6px 8px', fontWeight: 600 }}><Trans>Date</Trans></th>
-              <th style={{ padding: '6px 8px', fontWeight: 600 }}><Trans>Payee</Trans></th>
-              <th style={{ padding: '6px 8px', fontWeight: 600, textAlign: 'right' }}><Trans>Amount</Trans></th>
-              <th style={{ padding: '6px 8px', fontWeight: 600 }}><Trans>Assigned Category</Trans></th>
-              <th style={{ padding: '6px 8px', fontWeight: 600 }}><Trans>Reason/Notes</Trans></th>
+              <th style={{ padding: '6px 8px', fontWeight: 600 }}>
+                <Trans>Date</Trans>
+              </th>
+              <th style={{ padding: '6px 8px', fontWeight: 600 }}>
+                <Trans>Payee</Trans>
+              </th>
+              <th
+                style={{
+                  padding: '6px 8px',
+                  fontWeight: 600,
+                  textAlign: 'right',
+                }}
+              >
+                <Trans>Amount</Trans>
+              </th>
+              <th style={{ padding: '6px 8px', fontWeight: 600 }}>
+                <Trans>Assigned Category</Trans>
+              </th>
+              <th style={{ padding: '6px 8px', fontWeight: 600 }}>
+                <Trans>Reason/Notes</Trans>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -2453,7 +2474,7 @@ export function AutoClassificationToast({
                 let formattedDate = row.date;
                 try {
                   formattedDate = formatDate(parseISO(row.date), dateFormat);
-                } catch (e) {
+                } catch {
                   // Fallback
                 }
                 return (
@@ -2522,4 +2543,3 @@ export function AutoClassificationToast({
     </View>
   );
 }
-

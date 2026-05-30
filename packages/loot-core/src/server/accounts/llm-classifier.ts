@@ -1,5 +1,7 @@
+import * as asyncStorage from '#platform/server/asyncStorage';
 import { fetch } from '#platform/server/fetch';
 import { logger } from '#platform/server/log';
+import { getServer } from '#server/server-config';
 import { currentDay } from '#shared/months';
 import type { TransactionEntity } from '#types/models';
 import type {
@@ -184,6 +186,25 @@ function getSchema(categoryIds: string[]) {
   };
 }
 
+function stripUnsupportedGoogleSchemaFields(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stripUnsupportedGoogleSchemaFields);
+  }
+
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => key !== 'additionalProperties')
+      .map(([key, childValue]) => [
+        key,
+        stripUnsupportedGoogleSchemaFields(childValue),
+      ]),
+  );
+}
+
 function parseJson(raw: string): unknown {
   try {
     return JSON.parse(raw);
@@ -261,19 +282,43 @@ async function fetchJson(
   headers: Record<string, string>,
   timeoutMs: number,
 ): Promise<unknown> {
+  const server = getServer();
+  const isOllama = url.includes('11434');
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        ...headers,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
+    let response: Response;
+    if (server && !isOllama) {
+      const userToken = await asyncStorage.getItem('user-token');
+      const proxyUrl = `${server.BASE_SERVER}/llm-proxy`;
+      response = await fetch(proxyUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-ACTUAL-TOKEN': userToken || '',
+        },
+        body: JSON.stringify({
+          url,
+          method: 'POST',
+          headers,
+          body,
+        }),
+        signal: controller.signal,
+      });
+    } else {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    }
+
     const text = await response.text();
     if (!response.ok) {
       throw new Error(`LLM provider returned HTTP ${response.status}: ${text}`);
@@ -344,6 +389,7 @@ export function getProviderRequest({
   const model = config.model || defaults.model;
   const endpoint = config.endpoint || defaults.endpoint;
   const schema = getSchema(categoryIds);
+  const googleSchema = stripUnsupportedGoogleSchemaFields(schema);
 
   switch (config.provider) {
     case 'ollama':
@@ -417,7 +463,7 @@ export function getProviderRequest({
           generationConfig: {
             temperature: 0,
             responseMimeType: 'application/json',
-            responseSchema: schema,
+            responseSchema: googleSchema,
           },
         },
       };
@@ -439,7 +485,7 @@ export function getProviderRequest({
           generationConfig: {
             temperature: 0,
             responseMimeType: 'application/json',
-            responseSchema: schema,
+            responseSchema: googleSchema,
           },
         },
       };
