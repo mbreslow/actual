@@ -201,6 +201,7 @@ Rules:
 - confidence must be a number from 0 to 1.
 - reason must be brief and based only on payee, imported payee, notes, amount, date, and account.
 - hints are user-provided descriptions of what each category means in this budget. Prefer these hints over generic merchant assumptions when they are relevant.
+- Treat broad catch-all categories such as Flexible Spending, Miscellaneous, Other, General, or Everything Else as a last resort. Use a more specific allowed category when the payee, imported payee, notes, or hints clearly indicate one.
 - Classify refunds or credits by the underlying merchant/category, not by the sign of the amount.
 - When uncertain, choose the closest allowed category and lower the confidence.`;
 }
@@ -616,6 +617,7 @@ async function classifyCandidates(
     provider: LLMClassificationProvider;
   },
   categories: CategoryForPrompt[],
+  { replaceExisting = false }: { replaceExisting?: boolean } = {},
 ): Promise<
   Array<
     Pick<
@@ -727,7 +729,7 @@ async function classifyCandidates(
     chunk.forEach((candidate, index) => {
       const id = start + index + 1;
       const result = results.get(id);
-      if (result && !candidate.trans.category) {
+      if (result && (replaceExisting || !candidate.trans.category)) {
         const update = {
           id: candidate.trans.id,
           category: result.categoryId,
@@ -842,8 +844,10 @@ export async function classifyBankSyncTransactions(
 
 export async function classifyExistingUncategorizedTransactions({
   ids = [],
+  replaceExisting = false,
 }: {
   ids?: string[];
+  replaceExisting?: boolean;
 } = {}): Promise<{
   classified: number;
   updates?: Array<
@@ -873,6 +877,8 @@ export async function classifyExistingUncategorizedTransactions({
     selectedIds.length > 0
       ? `AND t.id IN (${selectedIds.map(() => '?').join(', ')})`
       : '';
+  const categoryFilter =
+    replaceExisting && selectedIds.length > 0 ? '' : 'AND t.category IS NULL';
   const [categories, payees, accounts, transactions] = await Promise.all([
     getCategories(),
     db.getPayees(),
@@ -882,7 +888,7 @@ export async function classifyExistingUncategorizedTransactions({
          FROM v_transactions_internal t
          JOIN accounts a ON a.id = t.account
         WHERE a.offbudget = 0
-          AND t.category IS NULL
+          ${categoryFilter}
           AND t.is_parent = 0
           AND t.tombstone = 0
           AND t.transfer_id IS NULL
@@ -908,7 +914,9 @@ export async function classifyExistingUncategorizedTransactions({
   }));
 
   try {
-    const updated = await classifyCandidates(candidates, config, categories);
+    const updated = await classifyCandidates(candidates, config, categories, {
+      replaceExisting,
+    });
     if (updated.length > 0) {
       const { batchUpdateTransactions } = await import('#server/transactions');
       await batchUpdateTransactions({ updated, runTransfers: false });

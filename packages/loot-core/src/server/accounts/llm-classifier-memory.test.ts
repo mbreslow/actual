@@ -164,6 +164,59 @@ describe('LLM Classifier Memory', () => {
     ).rejects.toThrow('LLM transaction categorization is disabled.');
   });
 
+  test('selected manual classification can replace an existing category', async () => {
+    const { accountId, groceries, diningOut, payeeId } =
+      await prepareDatabase();
+    await db.update('preferences', {
+      id: 'llmClassificationEnabled',
+      value: 'true',
+    });
+    vi.mocked(asyncStorage.getItem).mockResolvedValue({
+      provider: 'ollama',
+      model: 'test-model',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          message: {
+            content: JSON.stringify({
+              classifications: [
+                {
+                  id: 1,
+                  categoryId: diningOut,
+                  confidence: 0.97,
+                  reason: 'Restaurant merchant',
+                },
+              ],
+            }),
+          },
+        }),
+      ),
+    );
+
+    const txId = await db.insertTransaction({
+      account: accountId,
+      amount: -1234,
+      date: '2020-01-01',
+      payee: payeeId,
+      imported_payee: 'KROGER STORE 123',
+      category: groceries,
+    });
+
+    const result = await classifyExistingUncategorizedTransactions({
+      ids: [txId],
+      replaceExisting: true,
+    });
+
+    expect(result.classified).toBe(1);
+    const classifiedTx = await db.select('transactions', txId);
+    expect(classifiedTx.category).toBe(diningOut);
+    expect(classifiedTx.categorization_source).toBe('ai');
+    expect(classifiedTx.categorization_note).toBe('Restaurant merchant');
+
+    fetchMock.mockRestore();
+  });
+
   test('bank sync classification requires global and account enablement', async () => {
     const { accountId, payeeId } = await prepareDatabase();
     vi.mocked(asyncStorage.getItem).mockResolvedValue({

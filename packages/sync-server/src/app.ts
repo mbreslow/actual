@@ -45,9 +45,9 @@ function summarizeProxyBody(text: string, contentType: string) {
       for (const [key, value] of Object.entries(record)) {
         summary[key] = Array.isArray(value)
           ? {
-              length: value.length,
-              first: value[0],
-            }
+            length: value.length,
+            first: value[0],
+          }
           : value;
       }
       return summary;
@@ -124,50 +124,51 @@ app.post('/llm-proxy', async (req, res) => {
     ['localhost', '127.0.0.1'].includes(parsedUrl.hostname) &&
     parsedUrl.port === '11434' &&
     parsedUrl.protocol === 'http:';
- 
+
   if (!allowedHosts.has(parsedUrl.hostname) && !isAllowedLocalOllama) {
     return res.status(400).json({ error: 'Unsupported LLM provider URL' });
   }
+  else {
+    try {
+      console.log('[LLM proxy] request', {
+        method,
+        url,
+        headers: redactHeaders(headers),
+        hasBody: Boolean(body),
+      });
 
-  try {
-    console.log('[LLM proxy] request', {
-      method,
-      url,
-      headers: redactHeaders(headers),
-      hasBody: Boolean(body),
-    });
+      const response = await fetch(url, {
+        method,
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
+        ...(body && { body: JSON.stringify(body) }),
+      });
 
-    const response = await fetch(url, {
-      method,
-      headers: {
-        ...headers,
-        'Content-Type': 'application/json',
-      },
-      ...(body && { body: JSON.stringify(body) }),
-    });
+      const contentType = response.headers.get('content-type') || '';
+      const text = await response.text();
 
-    const contentType = response.headers.get('content-type') || '';
-    const text = await response.text();
+      console.log('[LLM proxy] response', {
+        method,
+        url,
+        status: response.status,
+        contentType,
+        body: summarizeProxyBody(text, contentType),
+      });
 
-    console.log('[LLM proxy] response', {
-      method,
-      url,
-      status: response.status,
-      contentType,
-      body: summarizeProxyBody(text, contentType),
-    });
+      res.status(response.status);
 
-    res.status(response.status);
-
-    if (contentType.includes('application/json')) {
-      res.type(contentType).send(text);
-    } else {
-      res.send(text);
+      if (contentType.includes('application/json')) {
+        res.type(contentType).send(text);
+      } else {
+        res.send(text);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.log('[LLM proxy] error', { method, url, message });
+      res.status(500).json({ error: 'Error proxying request', details: message });
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.log('[LLM proxy] error', { method, url, message });
-    res.status(500).json({ error: 'Error proxying request', details: message });
   }
 });
 

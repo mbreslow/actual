@@ -225,6 +225,8 @@ export function AccountHeader({
   const selectedTransactionIds = [...(selectedItems ?? [])].filter(
     id => !id.includes('preview/'),
   );
+  const showAutoClassify =
+    accountId === 'uncategorized' || selectedTransactionIds.length > 0;
 
   function onToggleSplits() {
     if (tableRef.current) {
@@ -378,7 +380,7 @@ export function AccountHeader({
             </Button>
           )}
 
-          {accountId === 'uncategorized' && (
+          {showAutoClassify && (
             <Button
               variant="bare"
               onPress={() => onAutoClassify(selectedTransactionIds)}

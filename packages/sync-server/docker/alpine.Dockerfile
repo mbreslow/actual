@@ -7,11 +7,18 @@ RUN corepack enable
 WORKDIR /app
 
 COPY .yarn ./.yarn
-COPY yarn.lock package.json .yarnrc.yml ./
+COPY yarn.lock package.json .yarnrc.yml tsconfig.json tsconfig.root.json ./
 COPY packages ./packages
 
 # Avoiding memory issues with ARMv7
 RUN if [ "$(uname -m)" = "armv7l" ]; then yarn config set taskPoolConcurrency 2; yarn config set networkConcurrency 5; fi
+
+# Build the web client and sync server from the checked-out source so the
+# published image does not depend on stale local build artifacts.
+RUN yarn install --immutable
+RUN yarn workspace plugins-service build
+RUN yarn workspace @actual-app/web build:browser
+RUN yarn workspace @actual-app/sync-server build
 
 # Focus the workspaces in production mode
 RUN if [ "$(uname -m)" = "armv7l" ]; then npm_config_build_from_source=true yarn workspaces focus @actual-app/sync-server --production; else yarn workspaces focus @actual-app/sync-server --production; fi
@@ -43,6 +50,7 @@ ENV NODE_ENV=production
 
 # sync-server entry flattened at /app so CMD stays `node app.js`.
 COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/packages/desktop-client/build ./node_modules/@actual-app/web/build
 COPY --from=builder /app/packages/sync-server/package.json ./
 COPY --from=builder /app/packages/sync-server/build ./
 
