@@ -4,11 +4,14 @@ import * as db from '#server/db';
 import { loadMappings } from '#server/db/mappings';
 import { post } from '#server/post';
 import { getServer } from '#server/server-config';
+import { setSyncingMode } from '#server/sync';
 import { handlers } from '#server/tests/mockSyncServer';
 import { insertRule, loadRules } from '#server/transactions/transaction-rules';
 import * as monthUtils from '#shared/months';
+import type { ImportTransactionsOpts } from '#types/api-handlers';
 import type { SyncedPrefs } from '#types/prefs';
 
+import { app as accountsApp } from './app';
 import {
   addTransactions,
   reconcileTransactions,
@@ -40,6 +43,31 @@ function getAllTransactions() {
        ORDER BY date DESC, amount DESC, id
      `,
   );
+}
+
+function getOllamaUserPrompt(body: BodyInit | null | undefined): string {
+  if (typeof body !== 'string') {
+    throw new Error('Expected a JSON request body');
+  }
+  const request: unknown = JSON.parse(body);
+  if (
+    typeof request !== 'object' ||
+    request === null ||
+    !('messages' in request) ||
+    !Array.isArray(request.messages)
+  ) {
+    throw new Error('Expected an Ollama messages array');
+  }
+  const userMessage: unknown = request.messages[1];
+  if (
+    typeof userMessage !== 'object' ||
+    userMessage === null ||
+    !('content' in userMessage) ||
+    typeof userMessage.content !== 'string'
+  ) {
+    throw new Error('Expected an Ollama user prompt');
+  }
+  return userMessage.content;
 }
 
 async function prepareDatabase() {
@@ -77,6 +105,233 @@ async function getAllPayees() {
 }
 
 describe('Account sync', () => {
+  test('bank sync LLM categorization is disabled by default', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}'));
+    const { id: acctId } = await prepareDatabase();
+
+    vi.mocked(asyncStorage.getItem).mockResolvedValue({
+      provider: 'ollama',
+      model: 'test-model',
+    });
+    await db.update('preferences', {
+      id: `sync-llm-classify-${acctId}` satisfies keyof SyncedPrefs,
+      value: 'true',
+    });
+
+    await reconcileTransactions(
+      acctId,
+      [
+        {
+          date: '2020-01-02',
+          payeeName: 'Kroger',
+          transactionAmount: { amount: '-12.34' },
+          transactionId: 'llm-disabled',
+          booked: true,
+        },
+      ],
+      true,
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockRestore();
+  });
+
+  test('bank sync LLM categorization still requires account enablement', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}'));
+    const { id: acctId } = await prepareDatabase();
+
+    await db.update('preferences', {
+      id: 'llmClassificationEnabled' satisfies keyof SyncedPrefs,
+      value: 'true',
+    });
+    vi.mocked(asyncStorage.getItem).mockResolvedValue({
+      provider: 'ollama',
+      model: 'test-model',
+    });
+
+    await reconcileTransactions(
+      acctId,
+      [
+        {
+          date: '2020-01-02',
+          payeeName: 'Kroger',
+          transactionAmount: { amount: '-12.34' },
+          transactionId: 'llm-account-disabled',
+          booked: true,
+        },
+      ],
+      true,
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockRestore();
+  });
+
+  test('bank sync LLM categorizes only new uncategorized transactions', async () => {
+    const { id: acctId } = await prepareDatabase();
+    await db.insertCategoryGroup({
+      id: 'expenses',
+      name: 'Expenses',
+      is_income: 0,
+    });
+    const groceries = await db.insertCategory({
+      id: 'groceries',
+      name: 'Groceries',
+      cat_group: 'expenses',
+      is_income: 0,
+    });
+    const travel = await db.insertCategory({
+      id: 'travel',
+      name: 'Travel',
+      cat_group: 'expenses',
+      is_income: 0,
+    });
+
+    await db.update('preferences', {
+      id: `sync-llm-classify-${acctId}` satisfies keyof SyncedPrefs,
+      value: 'true',
+    });
+    await db.update('preferences', {
+      id: 'llmClassificationEnabled' satisfies keyof SyncedPrefs,
+      value: 'true',
+    });
+    vi.mocked(asyncStorage.getItem).mockResolvedValue({
+      provider: 'ollama',
+      model: 'test-model',
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          message: {
+            content: JSON.stringify({
+              classifications: [
+                {
+                  id: 1,
+                  categoryId: groceries,
+                  confidence: 0.99,
+                  reason: 'Grocery merchant',
+                },
+              ],
+            }),
+          },
+        }),
+      ),
+    );
+
+    await reconcileTransactions(
+      acctId,
+      [
+        {
+          date: '2020-01-02',
+          payeeName: 'Kroger',
+          transactionAmount: { amount: '-12.34' },
+          transactionId: 'llm-enabled',
+          booked: true,
+        },
+        {
+          date: '2020-01-03',
+          payeeName: 'Hotel',
+          transactionAmount: { amount: '-55.00' },
+          transactionId: 'already-categorized',
+          booked: true,
+          category: travel,
+        },
+      ],
+      true,
+    );
+
+    const transactions = await getAllTransactions();
+    expect(
+      transactions.find(t => t.imported_id === 'llm-enabled')?.category,
+    ).toBe(groceries);
+    expect(
+      transactions.find(t => t.imported_id === 'already-categorized')?.category,
+    ).toBe(travel);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockRestore();
+  });
+
+  test('bank sync LLM categorizes transactions one at a time', async () => {
+    const { id: acctId } = await prepareDatabase();
+    await db.insertCategoryGroup({
+      id: 'expenses',
+      name: 'Expenses',
+      is_income: 0,
+    });
+    const groceries = await db.insertCategory({
+      id: 'groceries',
+      name: 'Groceries',
+      cat_group: 'expenses',
+      is_income: 0,
+    });
+
+    await db.update('preferences', {
+      id: `sync-llm-classify-${acctId}` satisfies keyof SyncedPrefs,
+      value: 'true',
+    });
+    await db.update('preferences', {
+      id: 'llmClassificationEnabled' satisfies keyof SyncedPrefs,
+      value: 'true',
+    });
+    vi.mocked(asyncStorage.getItem).mockResolvedValue({
+      provider: 'ollama',
+      model: 'test-model',
+      batchSize: 12,
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          message: {
+            content: JSON.stringify({
+              classifications: [
+                {
+                  id: 1,
+                  categoryId: groceries,
+                  confidence: 0.99,
+                  reason: 'Grocery merchant',
+                },
+              ],
+            }),
+          },
+        }),
+      ),
+    );
+
+    await reconcileTransactions(
+      acctId,
+      [
+        {
+          date: '2020-01-02',
+          payeeName: 'Kroger',
+          transactionAmount: { amount: '-12.34' },
+          transactionId: 'llm-first',
+          booked: true,
+        },
+        {
+          date: '2020-01-03',
+          payeeName: 'Market',
+          transactionAmount: { amount: '-23.45' },
+          transactionId: 'llm-second',
+          booked: true,
+        },
+      ],
+      true,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const call of fetchMock.mock.calls) {
+      const prompt = getOllamaUserPrompt(call[1]?.body);
+      expect(prompt.match(/"id":/g)).toHaveLength(1);
+    }
+    fetchMock.mockRestore();
+  });
+
   test('reconcile creates payees correctly', async () => {
     const { id } = await prepareDatabase();
 
@@ -99,6 +354,123 @@ describe('Account sync', () => {
     expect(transactions.find(t => t.amount === 5000).payee).toBe(
       payees.find(p => p.name === 'Kroger').id,
     );
+  });
+
+  test('reconcile title-cases the payee name by default', async () => {
+    const { id } = await prepareDatabase();
+
+    await reconcileTransactions(id, [
+      {
+        date: '2020-01-02',
+        payee_name: 'Nintendo Store New York NY',
+        amount: 4133,
+      },
+    ]);
+
+    const payees = await getAllPayees();
+    expect(payees.length).toBe(1);
+    expect(payees[0].name).toBe('Nintendo Store New York Ny');
+
+    const transactions = await getAllTransactions();
+    expect(transactions[0].imported_payee).toBe('Nintendo Store New York Ny');
+  });
+
+  test('transactions-import title-cases the payee name by default', async () => {
+    const { id } = await prepareDatabase();
+
+    await accountsApp.handlers['transactions-import']({
+      accountId: id,
+      transactions: [
+        {
+          account: id,
+          date: '2020-01-02',
+          payee_name: 'Nintendo Store New York NY',
+          amount: 4133,
+        },
+      ],
+      isPreview: false,
+    });
+
+    const payees = await getAllPayees();
+    expect(payees.length).toBe(1);
+    expect(payees[0].name).toBe('Nintendo Store New York Ny');
+
+    const transactions = await getAllTransactions();
+    expect(transactions[0].imported_payee).toBe('Nintendo Store New York Ny');
+  });
+
+  test("transactions-import keeps the payee name with payeeNameNormalization 'original'", async () => {
+    const { id } = await prepareDatabase();
+
+    await accountsApp.handlers['transactions-import']({
+      accountId: id,
+      transactions: [
+        {
+          account: id,
+          date: '2020-01-02',
+          payee_name: 'Nintendo Store New York NY',
+          amount: 4133,
+        },
+      ],
+      isPreview: false,
+      opts: { payeeNameNormalization: 'original' },
+    });
+
+    const payees = await getAllPayees();
+    expect(payees.length).toBe(1);
+    expect(payees[0].name).toBe('Nintendo Store New York NY');
+
+    const transactions = await getAllTransactions();
+    expect(transactions[0].imported_payee).toBe('Nintendo Store New York NY');
+  });
+
+  test("transactions-import trims the payee name with payeeNameNormalization 'original'", async () => {
+    const { id } = await prepareDatabase();
+
+    await accountsApp.handlers['transactions-import']({
+      accountId: id,
+      transactions: [
+        {
+          account: id,
+          date: '2020-01-02',
+          payee_name: '  Nintendo Store New York NY  ',
+          amount: 4133,
+        },
+      ],
+      isPreview: false,
+      opts: { payeeNameNormalization: 'original' },
+    });
+
+    const payees = await getAllPayees();
+    expect(payees.length).toBe(1);
+    expect(payees[0].name).toBe('Nintendo Store New York NY');
+
+    const transactions = await getAllTransactions();
+    expect(transactions[0].imported_payee).toBe('Nintendo Store New York NY');
+  });
+
+  test('transactions-import rejects an unknown payeeNameNormalization', async () => {
+    const { id } = await prepareDatabase();
+
+    await expect(
+      accountsApp.handlers['transactions-import']({
+        accountId: id,
+        transactions: [
+          {
+            account: id,
+            date: '2020-01-02',
+            payee_name: 'Nintendo Store New York NY',
+            amount: 4133,
+          },
+        ],
+        isPreview: false,
+        opts: {
+          payeeNameNormalization: 'titlecase',
+        } as unknown as ImportTransactionsOpts,
+      }),
+    ).rejects.toThrow(/payeeNameNormalization/);
+
+    expect(await getAllPayees()).toEqual([]);
   });
 
   test('reconcile handles transactions with undefined fields', async () => {
@@ -188,12 +560,7 @@ describe('Account sync', () => {
     await reconcileTransactions(
       acctId,
       [{ date: '2020-01-01', imported_id: 'finid-override' }],
-      false,
-      true,
-      false,
-      true,
-      false,
-      false,
+      { reimportDeleted: false },
     );
     const transactions2 = await getAllTransactions();
     expect(transactions2.length).toBe(1);
@@ -214,12 +581,7 @@ describe('Account sync', () => {
     await reconcileTransactions(
       acctId,
       [{ date: '2020-01-01', imported_id: 'finid-override2' }],
-      false,
-      true,
-      false,
-      true,
-      false,
-      true,
+      { reimportDeleted: true },
     );
     const transactions2 = await getAllTransactions();
     expect(transactions2.length).toBe(2);
@@ -244,12 +606,7 @@ describe('Account sync', () => {
     await reconcileTransactions(
       acctId,
       [{ date: '2020-01-01', imported_id: 'finid-precedence' }],
-      false,
-      true,
-      false,
-      true,
-      false,
-      false,
+      { reimportDeleted: false },
     );
     const transactions2 = await getAllTransactions();
     expect(transactions2.length).toBe(1);
@@ -620,8 +977,7 @@ describe('Account sync', () => {
             imported_id: 'something-else-entirely',
           },
         ],
-        false,
-        false,
+        { strictIdChecking: false },
       );
 
       payees = await getAllPayees();
@@ -643,6 +999,91 @@ describe('SimpleFin batch sync', () => {
 
   afterEach(() => {
     delete handlers['/simplefin/transactions'];
+  });
+
+  test('does not emit transaction CRDT messages when provider category appears later', async () => {
+    const providerAccountId = 'sf-account-1';
+    const acctId = await db.insertAccount({
+      id: 'acct-1',
+      account_id: providerAccountId,
+      name: 'Account 1',
+      account_sync_source: 'simpleFin',
+    });
+
+    const syncTransaction = category => {
+      mockSimpleFinTransactions({
+        [providerAccountId]: {
+          transactions: {
+            all: [
+              {
+                booked: true,
+                ...(category ? { category } : {}),
+                date: '2017-10-02',
+                payeeName: 'Coffee Shop',
+                transactionAmount: {
+                  amount: '-12.34',
+                },
+                transactionId: 'provider-tx-1',
+              },
+            ],
+            booked: [],
+            pending: [],
+          },
+          balances: [],
+          startingBalance: 0,
+        },
+        errors: {},
+      });
+
+      return accountsApp.handlers['simplefin-batch-sync']({ ids: [acctId] });
+    };
+
+    setSyncingMode('offline');
+    try {
+      const firstResult = await syncTransaction(null);
+      expect(firstResult[0].res.errors).toHaveLength(0);
+      expect(firstResult[0].res.newTransactions).toHaveLength(2);
+
+      const { count: crdtMessageCount } = await db.first<{ count: number }>(
+        'SELECT COUNT(*) as count FROM messages_crdt',
+      );
+      expect(crdtMessageCount).toBeGreaterThan(0);
+
+      global.stepForwardInTime();
+      const secondResult = await syncTransaction('provider-category');
+      expect(secondResult[0].res.errors).toHaveLength(0);
+      expect(secondResult[0].res.newTransactions).toHaveLength(0);
+      expect(secondResult[0].res.matchedTransactions).toHaveLength(0);
+
+      const secondSyncMessages = await db.all<db.DbCrdtMessage>(
+        'SELECT * FROM messages_crdt WHERE id > ? ORDER BY id',
+        [crdtMessageCount],
+      );
+
+      expect(secondSyncMessages).toHaveLength(3);
+      expect(secondSyncMessages.map(message => message.dataset)).toEqual([
+        'accounts',
+        'accounts',
+        'accounts',
+      ]);
+      expect(secondSyncMessages.map(message => message.column).sort()).toEqual([
+        'balance_current',
+        'bank_sync_status',
+        'last_sync',
+      ]);
+      expect(
+        secondSyncMessages.some(message => message.dataset === 'transactions'),
+      ).toBe(false);
+
+      const transactions = await getAllTransactions();
+      const syncedTransaction = transactions.find(
+        transaction => transaction.imported_id === 'provider-tx-1',
+      );
+      expect(syncedTransaction).toBeDefined();
+      expect(syncedTransaction.category).toBeNull();
+    } finally {
+      setSyncingMode('disabled');
+    }
   });
 
   test('returns ACCOUNT_MISSING error when an account is not in the response', async () => {

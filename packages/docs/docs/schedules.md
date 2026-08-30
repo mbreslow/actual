@@ -52,7 +52,7 @@ This flexibility allows you to customize your view — whether you want to see a
 
 Changing the upcoming length only affects how schedules are displayed in your ledger; it does not impact how your budget data is stored or calculated. You can adjust this setting at any time to fit your preferences. If we change the upcoming length to _1 month_ the Account register will also reflect this change:
 
-![Accont Register View with future schedules](/img/schedules/schedules-account-register.webp)
+![Account Register View with future schedules](/img/schedules/schedules-account-register.webp)
 
 ## Creating a Schedule
 
@@ -75,7 +75,7 @@ Since a mortgage payment is a recurring transaction, the **Repeats** checkbox sh
 You can also enter more than one date by hitting the **+** button next to the date field.
 This is useful for transactions that occur on multiple days of the month, such as a bi-weekly payments.
 
-![Example of changing the frequencey of a schedule](/img/schedules/schedules-add-repeat.webp)
+![Example of changing the frequency of a schedule](/img/schedules/schedules-add-repeat.webp)
 
 The **Move schedule** checkbox allows you to move the schedule either before or after a weekend, if the selected date falls on a weekend.
 
@@ -100,6 +100,25 @@ It may also be useful to link the schedule to transactions.
 
 Once a schedule is started, Actual will search the transaction history for entries that match the schedule. You can then select the matches, and will have the option to link those transactions to the current schedule. You can click on the **Find matching transactions** button to have Actual look for matches.
 
+## Converting Future Transactions to Schedules
+
+When you add a transaction with a future date, Actual can turn it into a single-time schedule instead of posting it to your register right away.
+
+1. Navigate to the account where you want to add the transaction.
+2. Click **Add transaction** and enter a future date along with the other details of the transaction.
+3. A **Schedule** button appears in the new transaction row, next to the **Add** button.
+4. Click **Schedule** to create a single-time schedule for the transaction's date.
+
+If the transaction's date is further away than your **Upcoming length** setting, a confirmation dialog appears before the schedule is created to warn you that the schedule will not be visible in the upcoming view until it gets closer to the date. Click **Create schedule anyway** to proceed, or **Cancel** to go back to the in-progress transaction and return to editing.
+
+The transaction is not posted to your register. Instead, it becomes an upcoming scheduled transaction that posts automatically on its scheduled date. You can find it and adjust its details later in [the Schedules view](#the-schedules-overview-screen).
+
+:::note
+The **Schedule** button only appears for future-dated transactions. For transactions dated today or earlier, it is hidden. As a shortcut, you can press **Ctrl+Shift+Enter** (**Cmd+Shift+Enter** on macOS) in the new transaction row instead of clicking **Schedule**.
+:::
+
+On mobile, a **Schedule** button also appears in the transaction editor when you add a new future-dated transaction or edit an existing future-dated transaction. Converting an existing transaction creates the schedule and then deletes the original transaction.
+
 ## Let Actual Find Scheduled Transactions
 
 Instead of manually entering each schedule, you can let Actual find and suggest schedules for you.
@@ -122,7 +141,7 @@ Navigate to the Accounts page, find the transaction you wish to create a schedul
 2. Once selected, go to the drop-down menu on the top right of the page.
 3. Click on **Link schedule**.
 
-![Example of transaction overivew](/img/schedules/schedules-from-transactions.webp)
+![Example of transaction overview](/img/schedules/schedules-from-transactions.webp)
 
 In the Pop up that appears click "Create New"
 
@@ -159,11 +178,11 @@ You can resolve this issue in one of two ways.
 
 ## How To Use Rules With Schedules
 
-Many times it's desired to add notes to the scheduled transactions or to assign categories automatically. This is done with the [Rules](/docs/budgeting/rules) tool. The tool can be reached directly from the Schedules page by clicking on the **Edit as a rule** button in the edit dialog of a schedule.
+Many times it's desired to add notes to the scheduled transactions or to assign categories automatically. This is done with the [Rules](./budgeting/rules/index.md) tool. The tool can be reached directly from the Schedules page by clicking on the **Edit as a rule** button in the edit dialog of a schedule.
 
 When you edit a schedule, the **Edit as rule** button will appear in the dialog
 
-![Example of editing a scheudle](/img/schedules/schedules-edit-as-rule.webp)
+![Example of editing a schedule](/img/schedules/schedules-edit-as-rule.webp)
 
 Click on **Edit as Rule** to further customize the automatic entry.
 

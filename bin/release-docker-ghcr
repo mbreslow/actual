@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$ROOT"
+
+registry="ghcr.io"
+owner="${GH_USERNAME:-}"
+image="actual-server"
+variant="ubuntu"
+dockerfile=""
+platforms="linux/amd64,linux/arm64"
+push=true
+login=true
+tags=()
+extra_args=()
+
+usage() {
+  cat <<'EOF'
+Build and publish the Actual sync-server Docker image to GHCR.
+
+Usage:
+  yarn release:docker [options]
+  ./bin/release-docker-ghcr [options]
+
+Options:
+  --owner <owner>        GHCR owner/user/org. Defaults to $GH_USERNAME.
+  --image <name>         Image name. Defaults to actual-server.
+  --tag <tag>            Tag to publish. Can be passed more than once.
+                         Defaults to latest.
+  --variant <name>       Dockerfile variant: ubuntu or alpine. Defaults to ubuntu.
+  --dockerfile <path>    Explicit Dockerfile path. Overrides --variant.
+  --platforms <list>     Buildx platform list. Defaults to linux/amd64,linux/arm64.
+  --registry <host>      Registry host. Defaults to ghcr.io.
+  --no-login             Do not run docker login, even when $GH_PAT is set.
+  --no-push              Build only; do not push. Uses buildx --load and requires one platform.
+  --build-arg <arg>      Extra docker buildx --build-arg value. Can be repeated.
+  --help                 Show this help.
+
+Authentication:
+  If GH_PAT is set, the script logs in with:
+    echo "$GH_PAT" | docker login ghcr.io -u "$GH_USERNAME" --password-stdin
+
+Examples:
+  GH_USERNAME=mbreslow GH_PAT=... yarn release:docker
+  yarn release:docker --owner mbreslow --tag latest --tag "$(git rev-parse --short HEAD)"
+  yarn release:docker --variant alpine
+EOF
+}
+
+require_value() {
+  if [[ $# -lt 2 || "$2" == --* ]]; then
+    echo "Missing value for $1." >&2
+    exit 1
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --owner)
+      require_value "$@"
+      owner="$2"
+      shift 2
+      ;;
+    --image)
+      require_value "$@"
+      image="$2"
+      shift 2
+      ;;
+    --tag)
+      require_value "$@"
+      tags+=("$2")
+      shift 2
+      ;;
+    --variant)
+      require_value "$@"
+      variant="$2"
+      shift 2
+      ;;
+    --dockerfile)
+      require_value "$@"
+      dockerfile="$2"
+      shift 2
+      ;;
+    --platforms)
+      require_value "$@"
+      platforms="$2"
+      shift 2
+      ;;
+    --registry)
+      require_value "$@"
+      registry="$2"
+      shift 2
+      ;;
+    --no-login)
+      login=false
+      shift
+      ;;
+    --no-push)
+      push=false
+      shift
+      ;;
+    --build-arg)
+      require_value "$@"
+      extra_args+=(--build-arg "$2")
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "$owner" ]]; then
+  echo "Missing GHCR owner. Set GH_USERNAME or pass --owner <owner>." >&2
+  exit 1
+fi
+
+if [[ ${#tags[@]} -eq 0 ]]; then
+  tags=(latest)
+fi
+
+if [[ -z "$dockerfile" ]]; then
+  case "$variant" in
+    ubuntu|alpine)
+      dockerfile="packages/sync-server/docker/${variant}.Dockerfile"
+      ;;
+    *)
+      echo "Unsupported variant: $variant. Use ubuntu, alpine, or --dockerfile <path>." >&2
+      exit 1
+      ;;
+  esac
+fi
+
+if [[ ! -f "$dockerfile" ]]; then
+  echo "Dockerfile does not exist: $dockerfile" >&2
+  exit 1
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "docker is not installed or is not on PATH." >&2
+  exit 1
+fi
+
+if ! docker buildx version >/dev/null 2>&1; then
+  echo "docker buildx is required for multi-platform releases." >&2
+  exit 1
+fi
+
+if [[ "$push" == false && "$platforms" == *,* ]]; then
+  echo "--no-push uses buildx --load, which only supports one platform. Pass --platforms linux/amd64 or another single platform." >&2
+  exit 1
+fi
+
+if [[ "$login" == true && -n "${GH_PAT:-}" ]]; then
+  echo "Logging in to ${registry} as ${owner}..."
+  echo "$GH_PAT" | docker login "$registry" -u "$owner" --password-stdin
+elif [[ "$login" == true ]]; then
+  echo "GH_PAT is not set; relying on existing docker auth for ${registry}."
+fi
+
+image_ref="${registry}/${owner}/${image}"
+tag_args=()
+for tag in "${tags[@]}"; do
+  if [[ -z "$tag" ]]; then
+    echo "Tag cannot be empty." >&2
+    exit 1
+  fi
+  tag_args+=(-t "${image_ref}:${tag}")
+done
+
+output_arg=(--push)
+if [[ "$push" == false ]]; then
+  output_arg=(--load)
+fi
+
+echo "Building ${image_ref} with ${dockerfile} for ${platforms}..."
+docker buildx build \
+  --platform "$platforms" \
+  -f "$dockerfile" \
+  "${tag_args[@]}" \
+  "${extra_args[@]}" \
+  "${output_arg[@]}" \
+  .
+
+echo "Done:"
+for tag in "${tags[@]}"; do
+  echo "  ${image_ref}:${tag}"
+done

@@ -5,6 +5,7 @@ export { AccountPage as Account } from '#components/mobile/accounts/AccountPage'
 
 export { MobileRulesPage as Rules } from '#components/mobile/rules/MobileRulesPage';
 export { MobileRuleEditPage as RuleEdit } from '#components/mobile/rules/MobileRuleEditPage';
+export { ClassificationHintsPage as ClassificationHints } from '#components/ClassificationHintsPage';
 
 export { MobileSchedulesPage as Schedules } from '#components/mobile/schedules/MobileSchedulesPage';
 export { MobileScheduleEditPage as ScheduleEdit } from '#components/mobile/schedules/MobileScheduleEditPage';

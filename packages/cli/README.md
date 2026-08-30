@@ -41,20 +41,41 @@ Configuration is resolved in this order (highest priority first):
 
 ### Environment Variables
 
-| Variable               | Description                                           |
-| ---------------------- | ----------------------------------------------------- |
-| `ACTUAL_SERVER_URL`    | URL of the Actual sync server (required)              |
-| `ACTUAL_PASSWORD`      | Server password (required unless using token)         |
-| `ACTUAL_SESSION_TOKEN` | Session token (alternative to password)               |
-| `ACTUAL_SYNC_ID`       | Budget Sync ID (required for most commands)           |
-| `ACTUAL_DATA_DIR`      | Local directory for cached budget data                |
-| `ACTUAL_CACHE_TTL`     | Cache TTL in seconds (default: 60)                    |
-| `ACTUAL_LOCK_TIMEOUT`  | Budget-dir lock wait timeout in seconds (default: 10) |
-| `ACTUAL_NO_LOCK`       | Set to `1` to disable budget-dir locking              |
+| Variable                                | Description                                                                                                                                  |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ACTUAL_SERVER_URL`                     | URL of the Actual sync server (required)                                                                                                     |
+| `ACTUAL_PASSWORD`                       | Server password (required unless using token)                                                                                                |
+| `ACTUAL_SESSION_TOKEN`                  | Session token (alternative to password)                                                                                                      |
+| `ACTUAL_SYNC_ID`                        | Budget Sync ID (required for most commands)                                                                                                  |
+| `ACTUAL_DATA_DIR`                       | Local directory for cached budget data                                                                                                       |
+| `ACTUAL_*_FILE`                         | File-based alternative for `ACTUAL_SERVER_URL`, `ACTUAL_PASSWORD`, `ACTUAL_SESSION_TOKEN`, `ACTUAL_SYNC_ID`, or `ACTUAL_ENCRYPTION_PASSWORD` |
+| `ACTUAL_LLM_CLASSIFICATION_CONFIG_FILE` | JSON file containing worker LLM classification config                                                                                        |
+| `ACTUAL_CACHE_TTL`                      | Cache TTL in seconds (default: 60)                                                                                                           |
+| `ACTUAL_LOCK_TIMEOUT`                   | Budget-dir lock wait timeout in seconds (default: 10)                                                                                        |
+| `ACTUAL_NO_LOCK`                        | Set to `1` to disable budget-dir locking                                                                                                     |
+| `ACTUAL_DAILY_SYNC_TIME`                | Daily bank-sync worker run time (`HH:mm`, default: `06:00`)                                                                                  |
+| `ACTUAL_DAILY_SYNC_TIMEZONE`            | IANA timezone for the daily bank-sync worker (default: `America/New_York`)                                                                   |
+| `RUN_ON_START`                          | Run the bank-sync worker immediately on startup (`true` by default; set to `false` to wait for the schedule)                                 |
 
 ### Config File
 
-Create an `.actualrc.json` (or `.actualrc`, `.actualrc.yaml`, `actual.config.js`):
+The CLI uses [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig) for configuration. The config file can be anywhere between the current working directory and your home directory.
+
+You can create a config file in any of these formats:
+
+- `.actualrc` (JSON or YAML)
+- `.actualrc.json`, `.actualrc.yaml`, `.actualrc.yml`
+- `actual.config.json`, `actual.config.yaml`, `actual.config.yml`
+- An `"actual"` key in your `package.json`
+
+You can instead store your configuration in the `actual` subdirectory of the global configuration directory (e.g. `~/.config/actual/` on Linux) in any of these formats:
+
+- `config` (JSON or YAML)
+- `config.json`
+- `config.yaml`
+- `config.yml`
+
+Example `.actualrc.json`:
 
 ```json
 {
@@ -67,7 +88,7 @@ Create an `.actualrc.json` (or `.actualrc`, `.actualrc.yaml`, `actual.config.js`
 }
 ```
 
-**Security:** Do not store plaintext passwords in config files (e.g. `.actualrc.json`, `.actualrc`, `.actualrc.yaml`, `actual.config.js`). Add these files to `.gitignore` if they contain secrets. Prefer the `ACTUAL_SESSION_TOKEN` environment variable instead of the `password` field. See [Environment Variables](#environment-variables) for using a session token.
+**Security:** Avoid storing plaintext passwords in config files (including the `password` key above). If these files do contain passwords, set restrictive permissions (e.g. 600 on Linux), and, if they are in a git repo, add them to `.gitignore`. Prefer environment variables such as `ACTUAL_PASSWORD` or `ACTUAL_SESSION_TOKEN`, or use a session token in config instead of a password. See [Environment Variables](#environment-variables) for details.
 
 ### Global Flags
 
@@ -128,6 +149,18 @@ actual budgets set-amount --month 2026-03 --category <id> --amount 50000
 # Run an ActualQL query
 actual query run --table transactions \
   --select "date,amount,payee" --filter '{"amount":{"$lt":0}}' --limit 10
+
+# Run bank sync once
+actual server bank-sync
+
+# Run bank sync daily at 06:00 America/New_York
+actual server bank-sync-worker
+
+# Run immediately, then continue on the daily schedule
+RUN_ON_START=1 actual server bank-sync-worker
+
+# Start the persistent worker with Docker Compose
+docker compose --profile daily-sync-worker up -d actual-daily-sync-worker
 ```
 
 ### Amount Convention

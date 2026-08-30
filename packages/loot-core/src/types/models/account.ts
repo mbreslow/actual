@@ -1,3 +1,4 @@
+import type { AccountGroupEntity } from './account-group';
 import type { BankSyncProviders } from './bank-sync';
 
 export type AccountEntity = {
@@ -8,6 +9,7 @@ export type AccountEntity = {
   sort_order: number;
   last_reconciled: string | null;
   tombstone: 0 | 1;
+  account_group_id: AccountGroupEntity['id'] | null;
 
   // Sync fields
   account_id: string | null;
@@ -32,4 +34,7 @@ export type BankSyncStatus =
   | 'sync-requested'
   | 'failed'
   | 'reauth-required'
-  | 'attention-required';
+  | 'attention-required'
+  | 'rate-limit-exceeded'
+  | 'timed-out'
+  | 'account-missing';

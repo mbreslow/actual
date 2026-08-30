@@ -4,14 +4,35 @@ export type FeatureFlag =
   | 'actionTemplating'
   | 'formulaMode'
   | 'currency'
-  | 'ageOfMoneyReport'
   | 'balanceForecastReport'
   | 'customThemes'
   | 'budgetAnalysisReport'
-  | 'payeeLocations'
   | 'enableBanking'
   | 'sankeyReport'
-  | 'akahuBankSync';
+  | 'akahuBankSync'
+  | 'mobileCalculator'
+  | 'monteCarloReport';
+
+export type LLMClassificationProvider =
+  | 'ollama'
+  | 'openai'
+  | 'anthropic'
+  | 'google'
+  | 'googleVertex'
+  | 'amazonBedrock';
+
+export type LLMClassificationConfig = Partial<{
+  provider: LLMClassificationProvider;
+  model: string;
+  endpoint: string;
+  apiKey: string;
+  apiKeys?: Record<string, string>;
+  timeoutMs: number;
+  batchSize: number;
+  vertexProjectId: string;
+  vertexLocation: string;
+  bedrockRegion: string;
+}>;
 
 /**
  * Cross-device preferences. These sync across devices when they are changed.
@@ -30,10 +51,19 @@ export type SyncedPrefs = Partial<
     | 'defaultCurrencyCode'
     | `show-account-${string}-net-worth-chart`
     | `side-nav.show-balance-history-${string}`
+    // @deprecated: superseded by `transaction-table-columns-${string}`; only
+    // read as a fallback for budgets that never used the column manager
     | `show-balances-${string}`
     | `show-extra-balances-${string}`
+    | `show-categorization-details-${string}`
+    // @deprecated: superseded by `transaction-table-columns-${string}`; only
+    // read as a fallback for budgets that never used the column manager
     | `hide-cleared-${string}`
     | `hide-reconciled-${string}`
+    | 'transaction-table-columns'
+    | `transaction-table-columns-${string}`
+    | `show-group-${string}`
+    | 'sync-transfer-date'
     // TODO: pull from src/components/modals/ImportTransactions.js
     | `parse-date-${string}-${'csv' | 'qif'}`
     | `import-reimport-deleted-${string}`
@@ -45,10 +75,13 @@ export type SyncedPrefs = Partial<
     | `csv-out-value-${string}`
     | `csv-has-header-${string}`
     | `custom-sync-mappings-${string}`
+    | 'llmClassificationEnabled'
+    | 'llmClassificationHints'
     | `sync-import-pending-${string}`
     | `sync-reimport-deleted-${string}`
     | `sync-import-notes-${string}`
     | `sync-import-transactions-${string}`
+    | `sync-llm-classify-${string}`
     | `sync-update-dates-${string}`
     | `ofx-fallback-missing-payee-${string}`
     | `ofx-swap-payee-memo-${string}`
@@ -90,12 +123,14 @@ export type LocalPrefs = Partial<{
   'budget.showHiddenCategories': boolean;
   'budget.startMonth': string;
   'flags.updateNotificationShownForVersion': string;
+  'tour.introSeen': boolean;
   'schedules.showCompleted': boolean;
   reportsViewLegend: boolean;
   reportsViewSummary: boolean;
   reportsViewLabel: boolean;
   sidebarWidth: number;
   'mobile.showSpentColumn': boolean;
+  'mobile.bankSyncProvidersCollapsed': boolean;
 }>;
 
 export type Theme = 'light' | 'dark' | 'auto' | 'midnight' | string;
@@ -132,6 +167,7 @@ export type GlobalPrefs = Partial<{
     port?: number;
   };
   notifyWhenUpdateIsAvailable: boolean;
+  llmClassificationConfig: LLMClassificationConfig;
 }>;
 
 // GlobalPrefsJson represents what's saved in the global-store.json file
@@ -160,6 +196,7 @@ export type GlobalPrefsJson = Partial<{
   'server-self-signed-cert'?: GlobalPrefs['serverSelfSignedCert'];
   syncServerConfig?: GlobalPrefs['syncServerConfig'];
   notifyWhenUpdateIsAvailable?: GlobalPrefs['notifyWhenUpdateIsAvailable'];
+  llmClassificationConfig?: GlobalPrefs['llmClassificationConfig'];
 }>;
 
 export type AuthMethods = 'password' | 'openid';

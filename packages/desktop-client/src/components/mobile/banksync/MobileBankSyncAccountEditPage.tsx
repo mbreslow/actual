@@ -39,6 +39,8 @@ export function MobileBankSyncAccountEditPage() {
     setImportTransactions,
     updateDates,
     setUpdateDates,
+    classifyWithLLM,
+    setClassifyWithLLM,
     mappings,
     setMapping,
     fields,
@@ -155,6 +157,8 @@ export function MobileBankSyncAccountEditPage() {
               setImportTransactions={setImportTransactions}
               updateDates={updateDates}
               setUpdateDates={setUpdateDates}
+              classifyWithLLM={classifyWithLLM}
+              setClassifyWithLLM={setClassifyWithLLM}
               helpMode="mobile"
             />
           </View>

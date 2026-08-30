@@ -5,6 +5,8 @@ import type { Command } from 'commander';
 import { withConnection } from '#connection';
 import { printOutput } from '#output';
 
+import { runBankSyncWorker } from './bank-sync-worker';
+
 export function registerServerCommand(program: Command) {
   const server = program.command('server').description('Server utilities');
 
@@ -64,5 +66,32 @@ export function registerServerCommand(program: Command) {
         },
         { mutates: true },
       );
+    });
+
+  server
+    .command('bank-sync-worker')
+    .description('Run bank synchronization on a daily schedule')
+    .option('--account <id>', 'Specific account ID to sync')
+    .option(
+      '--schedule <HH:mm>',
+      'Daily run time in 24-hour time (env: ACTUAL_DAILY_SYNC_TIME; default: 06:00)',
+    )
+    .option(
+      '--timezone <iana>',
+      'IANA timezone for --schedule (env: ACTUAL_DAILY_SYNC_TIMEZONE; default: America/New_York)',
+    )
+    .option(
+      '--run-on-start',
+      'Run immediately before waiting for the next scheduled run (env: RUN_ON_START)',
+      false,
+    )
+    .option(
+      '--llm-config-file <path>',
+      'JSON file containing LLM classification config (env: ACTUAL_LLM_CLASSIFICATION_CONFIG_FILE)',
+    )
+    .option('--once', 'Run once and exit', false)
+    .action(async cmdOpts => {
+      const opts = program.opts();
+      await runBankSyncWorker(opts, cmdOpts);
     });
 }

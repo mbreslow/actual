@@ -1,6 +1,7 @@
 // @ts-strict-ignore
 import * as asyncStorage from '#platform/server/asyncStorage';
 import * as connection from '#platform/server/connection';
+import { fetch } from '#platform/server/fetch';
 import * as fs from '#platform/server/fs';
 import { logger, setVerboseMode } from '#platform/server/log';
 import * as sqlite from '#platform/server/sqlite';
@@ -8,7 +9,9 @@ import { q } from '#shared/query';
 import { amountToInteger, integerToAmount } from '#shared/util';
 import type { Handlers } from '#types/handlers';
 
+import { app as accountGroupsApp } from './account-groups/app';
 import { app as accountsApp } from './accounts/app';
+import { getProviderModels } from './accounts/llm-models';
 import { app as adminApp } from './admin/app';
 import { installAPI } from './api';
 import { aqlQuery } from './aql';
@@ -19,8 +22,10 @@ import { app as dashboardApp } from './dashboard/app';
 import * as db from './db';
 import * as encryption from './encryption';
 import { app as encryptionApp } from './encryption/app';
+import { withErrorCode } from './errors';
 import { app as filtersApp } from './filters/app';
 import { app as forecastApp } from './forecast/app';
+import { app as formulasApp } from './formulas/app';
 import { app } from './main-app';
 import { mutator, runHandler } from './mutators';
 import { app as notesApp } from './notes/app';
@@ -122,6 +127,106 @@ handlers['app-focused'] = async function () {
   }
 };
 
+handlers['llm-fetch-models'] = async function ({ provider, apiKey, endpoint }) {
+  const server = getServer();
+  const isOllama = provider === 'ollama';
+
+  logger.log('[LLM models] Fetching provider model list', {
+    provider,
+    endpoint,
+    hasApiKey: Boolean(apiKey),
+    viaProxy: Boolean(server && !isOllama),
+  });
+
+  const models = await getProviderModels({
+    provider,
+    apiKey,
+    endpoint,
+    fetchJson: async (
+      targetUrl: string,
+      method: 'GET',
+      customHeaders: Record<string, string> = {},
+    ): Promise<unknown> => {
+      logger.log('[LLM models] Request', {
+        provider,
+        targetUrl,
+        method,
+        headerNames: Object.keys(customHeaders),
+      });
+
+      if (server && !isOllama) {
+        const userToken = await asyncStorage.getItem('user-token');
+        const proxyUrl = `${server.BASE_SERVER}/llm-proxy`;
+        const response = await fetch(proxyUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-ACTUAL-TOKEN': userToken || '',
+          },
+          body: JSON.stringify({
+            url: targetUrl,
+            method,
+            headers: customHeaders,
+          }),
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          logger.warn('[LLM models] Proxy error response', {
+            provider,
+            targetUrl,
+            status: response.status,
+            body: text.slice(0, 2000),
+          });
+          throw new Error(`Proxy error ${response.status}: ${text}`);
+        }
+
+        const json = await response.json();
+        logger.log('[LLM models] Proxy response body', {
+          provider,
+          targetUrl,
+          body: json,
+        });
+        return json;
+      } else {
+        const response = await fetch(targetUrl, {
+          method,
+          headers: {
+            ...customHeaders,
+          },
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          logger.warn('[LLM models] Direct error response', {
+            provider,
+            targetUrl,
+            status: response.status,
+            body: text.slice(0, 2000),
+          });
+          throw new Error(`Direct API returned ${response.status}: ${text}`);
+        }
+
+        const json = await response.json();
+        logger.log('[LLM models] Direct response body', {
+          provider,
+          targetUrl,
+          body: json,
+        });
+        return json;
+      }
+    },
+  });
+
+  logger.log('[LLM models] Parsed provider models', {
+    provider,
+    count: models.length,
+    models,
+  });
+
+  return models;
+};
+
 handlers = installAPI(handlers) as Handlers;
 
 // A hack for now until we clean up everything
@@ -135,12 +240,14 @@ app.combine(
   preferencesApp,
   toolsApp,
   filtersApp,
+  formulasApp,
   forecastApp,
   reportsApp,
   rulesApp,
   adminApp,
   transactionsApp,
   accountsApp,
+  accountGroupsApp,
   payeesApp,
   spreadsheetApp,
   syncApp,
@@ -225,6 +332,13 @@ export async function initApp(isDev, socketName) {
 }
 
 type BaseInitConfig = {
+  /**
+   * Directory where budget data is stored. In Node this is a directory on
+   * disk (defaults to the current working directory) and must already exist.
+   * In the browser build it is a path inside the worker's virtual filesystem
+   * (persisted to IndexedDB); it defaults to `/documents` and is created
+   * automatically if missing.
+   */
   dataDir?: string;
   verbose?: boolean;
 };
@@ -289,21 +403,30 @@ export async function init(config: InitConfig) {
       if (!user || user.tokenExpired === true) {
         // Clear invalid token
         await runHandler(handlers['subscribe-set-token'], { token: '' });
-        throw new Error(
-          'Authentication failed: invalid or expired session token',
+        throw withErrorCode(
+          new Error('Authentication failed: invalid or expired session token'),
+          'token-expired',
         );
       }
       if (user.offline === true) {
         // Clear token since we can't validate
         await runHandler(handlers['subscribe-set-token'], { token: '' });
-        throw new Error('Authentication failed: server offline or unreachable');
+        throw withErrorCode(
+          new Error('Authentication failed: server offline or unreachable'),
+          'network-failure',
+        );
       }
     } else if ('password' in config && config.password) {
       const result = await runHandler(handlers['subscribe-sign-in'], {
         password: config.password,
       });
       if (result?.error) {
-        throw new Error(`Authentication failed: ${result.error}`);
+        // `result.error` is already a machine-readable slug (e.g.
+        // 'invalid-password', 'network-failure')
+        throw withErrorCode(
+          new Error(`Authentication failed: ${result.error}`),
+          result.error,
+        );
       }
     }
   } else {

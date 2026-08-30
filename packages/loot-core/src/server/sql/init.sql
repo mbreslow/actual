@@ -55,6 +55,7 @@ CREATE TABLE transactions
    sort_order REAL,
    tombstone INTEGER DEFAULT 0);
 
+
 CREATE TABLE categories
  (id TEXT PRIMARY KEY,
   name TEXT,
@@ -86,3 +87,5 @@ CREATE TABLE messages_clock (id INTEGER PRIMARY KEY, clock TEXT);
 
 CREATE TABLE db_version (version TEXT PRIMARY KEY);
 CREATE TABLE __migrations__ (id INT PRIMARY KEY NOT NULL);
+
+

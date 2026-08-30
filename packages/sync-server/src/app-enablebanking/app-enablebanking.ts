@@ -9,6 +9,7 @@ import {
   requestLoggerMiddleware,
   validateSessionMiddleware,
 } from '#util/middlewares';
+import { isBlockedIp } from '#util/ssrf';
 
 import type {
   EnableBankingSession,
@@ -39,9 +40,21 @@ function extractPsuHeaders(req: Request): PsuHeaders {
       ? req.headers['user-agent']
       : undefined;
 
-  const headers: PsuHeaders = {};
-  if (ip) headers['Psu-Ip-Address'] = ip;
-  if (ua) headers['Psu-User-Agent'] = ua;
+  if (!ip || isBlockedIp(ip)) {
+    debug('Skipping PSU headers because PSU IP is local/private');
+    return {};
+  }
+
+  const headers: PsuHeaders = {
+    'Psu-Ip-Address': ip,
+  };
+
+  if (ua) {
+    headers['Psu-User-Agent'] = ua;
+  }
+
+  debug('Using PSU headers for public PSU IP');
+
   return headers;
 }
 
@@ -274,7 +287,7 @@ app.post(
 app.post(
   '/start-auth',
   handleError(async (req: Request, res: Response) => {
-    const { aspsp, redirectUrl, maxConsentValidity } = req.body || {};
+    const { aspsp, redirectUrl, maxConsentValidity, psuType } = req.body || {};
 
     if (!aspsp || !redirectUrl) {
       res.send({
@@ -295,6 +308,7 @@ app.post(
         redirectUrl,
         state,
         typeof maxConsentValidity === 'number' ? maxConsentValidity : undefined,
+        psuType === 'business' ? 'business' : 'personal',
       );
 
       res.send({

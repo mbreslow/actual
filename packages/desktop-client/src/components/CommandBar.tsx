@@ -5,6 +5,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import {
   SvgCog,
   SvgLibrary,
+  SvgLightBulb,
   SvgPiggyBank,
   SvgReports,
   SvgStoreFront,
@@ -14,6 +15,7 @@ import {
 } from '@actual-app/components/icons/v1';
 import {
   SvgCalendar3,
+  SvgHelp,
   SvgNotesPaperText,
 } from '@actual-app/components/icons/v2';
 import { styles } from '@actual-app/components/styles';
@@ -37,6 +39,7 @@ import {
 } from '#spreadsheet/bindings';
 
 import { CellValue, CellValueText } from './spreadsheet/CellValue';
+import { useTour } from './tour/TourProvider';
 
 type SearchableItem = {
   id: string;
@@ -97,6 +100,7 @@ export function CommandBar() {
   const navigate = useNavigate();
   const [budgetName] = useMetadataPref('budgetName');
   const { modalStack } = useModalState();
+  const { startTour } = useTour();
 
   const navigationItems = useMemo(
     () => [
@@ -115,6 +119,12 @@ export function CommandBar() {
       },
       { id: 'payees', name: t('Payees'), path: '/payees', Icon: SvgStoreFront },
       { id: 'rules', name: t('Rules'), path: '/rules', Icon: SvgTuning },
+      {
+        id: 'classification-hints',
+        name: t('Classification hints'),
+        path: '/classification-hints',
+        Icon: SvgLightBulb,
+      },
       { id: 'tags', name: t('Tags'), path: '/tags', Icon: SvgTag },
       { id: 'settings', name: t('Settings'), path: '/settings', Icon: SvgCog },
       {
@@ -235,6 +245,21 @@ export function CommandBar() {
         Icon: SvgNotesPaperText,
       })),
       onSelect: ({ id }) => handleNavigate(`/reports/custom/${id}`),
+    },
+    {
+      key: 'help',
+      heading: t('Help'),
+      items: [
+        {
+          id: 'start-tour',
+          name: t('Take a tour of {{appName}}', { appName: 'Actual' }),
+          Icon: SvgHelp,
+        },
+      ],
+      onSelect: () => {
+        setOpen(false);
+        startTour();
+      },
     },
   ];
 

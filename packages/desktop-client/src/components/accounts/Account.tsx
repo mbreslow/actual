@@ -1,27 +1,29 @@
-import React, { createRef, PureComponent, useEffect, useMemo } from 'react';
+import React, { createRef, PureComponent, startTransition, useEffect, useMemo } from 'react';
+
 import type { ReactElement, RefObject } from 'react';
 import { ErrorBoundary } from 'react-error-boundary';
 import { Trans } from 'react-i18next';
 import { Navigate, useLocation, useParams } from 'react-router';
 
+import { Button } from '@actual-app/components/button';
+import { AnimatedLoading } from '@actual-app/components/icons/AnimatedLoading';
+import { SvgDelete } from '@actual-app/components/icons/v0';
 import { styles } from '@actual-app/components/styles';
+import { Text } from '@actual-app/components/text';
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
 import { listen, send } from '@actual-app/core/platform/client/connection';
 import * as undo from '@actual-app/core/platform/client/undo';
 import type { UndoState } from '@actual-app/core/server/undo';
-import { currentDay } from '@actual-app/core/shared/months';
 import { q } from '@actual-app/core/shared/query';
 import type { Query } from '@actual-app/core/shared/query';
 import {
   makeAsNonChildTransactions,
   makeChild,
-  realizeTempTransactions,
   ungroupTransaction,
   ungroupTransactions,
-  updateTransaction,
 } from '@actual-app/core/shared/transactions';
-import { applyChanges } from '@actual-app/core/shared/util';
+import { applyChanges, integerToCurrency } from '@actual-app/core/shared/util';
 import type { IntegerAmount } from '@actual-app/core/shared/util';
 import type {
   AccountEntity,
@@ -33,9 +35,9 @@ import type {
   TransactionEntity,
   TransactionFilterEntity,
 } from '@actual-app/core/types/models';
+import { debounce, isEqual } from 'es-toolkit/compat';
+import { format as formatDate, parseISO } from 'date-fns';
 import { t } from 'i18next';
-import debounce from 'lodash/debounce';
-import isEqual from 'lodash/isEqual';
 import { v4 as uuidv4 } from 'uuid';
 
 import {
@@ -45,8 +47,13 @@ import {
   useUpdateAccountMutation,
 } from '#accounts';
 import { markAccountRead } from '#accounts/accountsSlice';
+import * as reconciliation from '#accounts/reconciliation';
 import { FeatureErrorFallback } from '#components/FeatureErrorFallback';
 import type { SavedFilter } from '#components/filters/SavedFilterMenuButton';
+import type {
+  TransactionTableColumn,
+  TransactionTableColumnId,
+} from '#components/transactions/table/columns';
 import { TransactionList } from '#components/transactions/TransactionList';
 import { validateAccountName } from '#components/util/accountValidation';
 import { useAccountPreviewTransactions } from '#hooks/useAccountPreviewTransactions';
@@ -68,12 +75,19 @@ import { useTransactionBatchActions } from '#hooks/useTransactionBatchActions';
 import { useTransactionFilters } from '#hooks/useTransactionFilters';
 import { calculateRunningBalancesBottomUp } from '#hooks/useTransactions';
 import {
+  SPECIAL_VIEW_IDS,
+  useTransactionTableColumns,
+} from '#hooks/useTransactionTableColumns';
+import {
   openAccountCloseModal,
   pushModal,
   replaceModal,
 } from '#modals/modalsSlice';
 import type { ConfirmTransactionEditReason } from '#modals/modalsSlice';
-import { addNotification } from '#notifications/notificationsSlice';
+import {
+  addNotification,
+  removeNotification,
+} from '#notifications/notificationsSlice';
 import { useCreatePayeeMutation } from '#payees';
 import * as queries from '#queries';
 import { aqlQuery } from '#queries/aqlQuery';
@@ -92,6 +106,19 @@ function isTransactionFilterEntity(
   filter: ConditionEntity,
 ): filter is TransactionFilterEntity {
   return 'id' in filter;
+}
+
+function getErrorMessage(error: unknown): string | undefined {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = error.message;
+    return typeof message === 'string' ? message : undefined;
+  }
+
+  return undefined;
 }
 
 type AllTransactionsProps = {
@@ -210,15 +237,19 @@ type AccountInternalProps = {
     | undefined;
   filterConditions: RuleConditionEntity[];
   showBalances?: boolean;
-  setShowBalances: (newValue: boolean) => void;
   showNetWorthChart: boolean;
   setShowNetWorthChart: (newValue: boolean) => void;
   showCleared?: boolean;
-  setShowCleared: (newValue: boolean) => void;
+  showCategorizationDetails: boolean;
+  setShowCategorizationDetails: (newValue: boolean) => void;
   showReconciled: boolean;
   setShowReconciled: (newValue: boolean) => void;
+  showGroup: boolean;
   showExtraBalances?: boolean;
   setShowExtraBalances: (newValue: boolean) => void;
+  transactionColumns: TransactionTableColumn[];
+  columnOrder: TransactionTableColumnId[];
+  saveColumns: (columns: TransactionTableColumn[], applyToAll: boolean) => void;
   modalShowing?: boolean;
   accounts: AccountEntity[];
   newTransactions: Array<TransactionEntity['id']>;
@@ -260,6 +291,7 @@ type AccountInternalState = {
   filterConditionsOp: 'and' | 'or';
   loading: boolean;
   workingHard: boolean;
+  autoClassifying: boolean;
   reconcileAmount: null | number;
   transactions: TransactionEntity[];
   transactionsFiltered?: boolean;
@@ -278,6 +310,22 @@ type AccountInternalState = {
     prevAscDesc?: 'asc' | 'desc' | undefined;
   } | null;
   filteredAmount: null | number;
+  autoClassificationById: Record<
+    string,
+    {
+      status: 'classifying' | 'classified' | 'fading';
+      category?: string;
+      transaction?: TransactionEntity;
+    }
+  >;
+  recentClassifications: Array<{
+    id: string;
+    date: string;
+    payee: string;
+    amount: number;
+    categoryName: string;
+    notes: string;
+  }>;
 };
 
 export type TableRef = RefObject<{
@@ -298,6 +346,7 @@ class AccountInternal extends PureComponent<
   table: TableRef;
   unlisten?: () => void;
   dispatchSelected?: (action: Actions) => void;
+  _isOptimisticUpdate: boolean = false;
 
   constructor(props: AccountInternalProps) {
     super(props);
@@ -311,6 +360,7 @@ class AccountInternal extends PureComponent<
       filterConditionsOp: 'and',
       loading: true,
       workingHard: false,
+      autoClassifying: false,
       reconcileAmount: null,
       transactions: [],
       showBalances: props.showBalances,
@@ -321,6 +371,8 @@ class AccountInternal extends PureComponent<
       isAdding: false,
       sort: null,
       filteredAmount: null,
+      autoClassificationById: {},
+      recentClassifications: [],
     };
   }
 
@@ -479,6 +531,32 @@ class AccountInternal extends PureComponent<
         const data = ungroupTransactions([...groupedData]);
         const firstLoad = prevData == null;
 
+        // Fast path for optimistic updates (e.g. field edits): skip the
+        // expensive aggregate DB queries (calculateBalances, getFilteredAmount)
+        // and just update the transaction list in state directly. Balances and
+        // filteredAmount will be refreshed on the next full DB-driven onData.
+        if (this._isOptimisticUpdate) {
+          this._isOptimisticUpdate = false;
+          const transactionsSnapshot = data;
+          const balances = this.state.showBalances
+            ? await this.calculateBalances()
+            : null;
+          // Wrap in startTransition so React treats this as a low-priority
+          // update. Without this, setState blocks the main thread for the
+          // full duration of the re-render (~40–220ms with large transaction
+          // lists), preventing input events from being processed and making
+          // the UI feel frozen. startTransition lets React break the render
+          // into chunks and yield to the browser between them, keeping the
+          // UI responsive while the row update happens in the background.
+          startTransition(() => {
+            this.setState({
+              transactions: transactionsSnapshot,
+              balances,
+            });
+          });
+          return;
+        }
+
         if (firstLoad) {
           this.table.current?.setRowAnimation(false);
 
@@ -629,7 +707,9 @@ class AccountInternal extends PureComponent<
   };
 
   onTransactionsChange = (updatedTransaction: TransactionEntity) => {
-    // Apply changes to pagedQuery data
+    // Apply changes to pagedQuery data optimistically. Set the flag so that
+    // onData skips the expensive aggregate DB queries for this update.
+    this._isOptimisticUpdate = true;
     this.paged?.optimisticUpdate(data => {
       if (updatedTransaction._deleted) {
         return data.filter(t => t.id !== updatedTransaction.id);
@@ -740,6 +820,186 @@ class AccountInternal extends PureComponent<
     }
   };
 
+  onAutoClassify = async (ids?: string[]) => {
+    const notificationId = 'llm-auto-classify-progress';
+    const shouldReplaceExisting = Boolean(ids && ids.length > 0);
+    try {
+      this.setState({
+        workingHard: true,
+        autoClassifying: true,
+        recentClassifications: [],
+      });
+      this.props.dispatch(
+        addNotification({
+          notification: {
+            id: notificationId,
+            type: 'message',
+            sticky: true,
+            message:
+              ids && ids.length > 0
+                ? t('Auto-classifying {{count}} selected transactions...', {
+                    count: ids.length,
+                  })
+                : t('Auto-classifying uncategorized transactions...'),
+          },
+        }),
+      );
+
+      let idsToClassify = ids && ids.length > 0 ? ids : [];
+      if (idsToClassify.length === 0) {
+        idsToClassify = this.state.transactions
+          .filter(t => !t.category && !t.is_parent)
+          .map(t => t.id);
+      }
+
+      let classified = 0;
+      for (const id of idsToClassify) {
+        const trans = this.state.transactions.find(t => t.id === id);
+        this.setState(state => ({
+          autoClassificationById: {
+            ...state.autoClassificationById,
+            [id]: { status: 'classifying', transaction: trans },
+          },
+        }));
+
+        try {
+          const res = await send('transactions-llm-classify-uncategorized', {
+            ids: [id],
+            replaceExisting: shouldReplaceExisting,
+          });
+
+          if (res && res.updates && res.updates.length > 0) {
+            const update = res.updates[0];
+            classified += 1;
+
+            const payee = trans
+              ? this.props.payees.find(p => p.id === trans.payee)
+              : null;
+            const payeeName = payee ? payee.name : trans?.imported_payee || '';
+            const category = this.props.categoryGroups
+              .flatMap(g => g.categories)
+              .find(c => c?.id === update.category);
+            const categoryName = category ? category.name : '';
+
+            const classificationRecord = {
+              id: trans?.id || id,
+              date: trans?.date || '',
+              payee: payeeName,
+              amount: trans?.amount || 0,
+              categoryName: categoryName || t('Uncategorized'),
+              notes: update.categorization_note || '',
+            };
+
+            this.setState(state => ({
+              autoClassificationById: {
+                ...state.autoClassificationById,
+                [id]: {
+                  status: 'classified',
+                  category: update.category,
+                  transaction: trans,
+                },
+              },
+              recentClassifications: [
+                classificationRecord,
+                ...(state.recentClassifications || []),
+              ].slice(0, 5),
+            }));
+
+            // Hold for 3 seconds
+            await new Promise(resolve => setTimeout(resolve, 3000));
+
+            // Mark as fading
+            this.setState(state => ({
+              autoClassificationById: {
+                ...state.autoClassificationById,
+                [id]: {
+                  status: 'fading',
+                  category: update.category,
+                  transaction: trans,
+                },
+              },
+            }));
+
+            // Wait 300ms for fade out transition
+            await new Promise(resolve => setTimeout(resolve, 300));
+
+            this.setState(
+              state => {
+                const nextMap = { ...state.autoClassificationById };
+                delete nextMap[id];
+                return { autoClassificationById: nextMap };
+              },
+              () => {
+                this.fetchTransactions(this.state.filterConditions);
+              },
+            );
+          } else {
+            this.setState(state => {
+              const nextMap = { ...state.autoClassificationById };
+              delete nextMap[id];
+              return { autoClassificationById: nextMap };
+            });
+          }
+        } catch (err) {
+          this.setState(state => {
+            const nextMap = { ...state.autoClassificationById };
+            delete nextMap[id];
+            return { autoClassificationById: nextMap };
+          });
+
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          const isConfigOrProviderError =
+            errorMessage.includes('configured') ||
+            errorMessage.includes('HTTP 40') ||
+            errorMessage.includes('HTTP 50') ||
+            errorMessage.includes('API key') ||
+            errorMessage.includes('key') ||
+            errorMessage.includes('endpoint') ||
+            errorMessage.includes('Unsupported LLM provider') ||
+            errorMessage.includes('Failed to fetch');
+
+          if (isConfigOrProviderError) {
+            throw err;
+          }
+          console.warn(
+            `Row-level classification error for transaction ${id}:`,
+            err,
+          );
+        }
+      }
+
+      this.fetchTransactions(this.state.filterConditions);
+      this.props.dispatch(removeNotification({ id: notificationId }));
+      this.props.dispatch(
+        addNotification({
+          notification: {
+            type: 'message',
+            message:
+              classified === 1
+                ? t('Auto-classified 1 transaction.')
+                : t('Auto-classified {{count}} transactions.', {
+                    count: classified,
+                  }),
+          },
+        }),
+      );
+    } catch (error) {
+      console.error('Error auto-classifying transactions:', error);
+      this.props.dispatch(removeNotification({ id: notificationId }));
+      this.props.dispatch(
+        addNotification({
+          notification: {
+            type: 'error',
+            message: t('Failed to auto-classify transactions.'),
+            pre: getErrorMessage(error),
+          },
+        }),
+      );
+    } finally {
+      this.setState({ workingHard: false, autoClassifying: false });
+    }
+  };
+
   onAddTransaction = () => {
     this.setState({ isAdding: true });
   };
@@ -776,10 +1036,11 @@ class AccountInternal extends PureComponent<
       | 'reopen'
       | 'export'
       | 'toggle-balance'
+      | 'toggle-categorization-details'
       | 'remove-sorting'
-      | 'toggle-cleared'
       | 'toggle-reconciled'
-      | 'toggle-net-worth-chart',
+      | 'toggle-net-worth-chart'
+      | 'manage-columns',
   ) => {
     const accountId = this.props.accountId!;
     const account = this.props.accounts.find(
@@ -825,26 +1086,6 @@ class AccountInternal extends PureComponent<
         const accountName = this.getAccountTitle(account, accountId);
         void this.onExport(accountName);
         break;
-      case 'toggle-balance':
-        if (this.state.showBalances) {
-          this.props.setShowBalances(false);
-          this.setState({ showBalances: false, balances: null });
-        } else {
-          this.props.setShowBalances(true);
-          this.setState(
-            {
-              transactions: [],
-              filterConditions: [],
-              search: '',
-              sort: null,
-              showBalances: true,
-            },
-            () => {
-              this.fetchTransactions();
-            },
-          );
-        }
-        break;
       case 'remove-sorting': {
         this.setState({ sort: null }, () => {
           const filterConditions = this.state.filterConditions;
@@ -859,14 +1100,10 @@ class AccountInternal extends PureComponent<
         });
         break;
       }
-      case 'toggle-cleared':
-        if (this.state.showCleared) {
-          this.props.setShowCleared(false);
-          this.setState({ showCleared: false });
-        } else {
-          this.props.setShowCleared(true);
-          this.setState({ showCleared: true });
-        }
+      case 'toggle-categorization-details':
+        this.props.setShowCategorizationDetails(
+          !this.props.showCategorizationDetails,
+        );
         break;
       case 'toggle-reconciled':
         if (this.state.showReconciled) {
@@ -888,7 +1125,107 @@ class AccountInternal extends PureComponent<
           this.props.setShowNetWorthChart(true);
         }
         break;
+      case 'manage-columns':
+        this.onManageColumns();
+        break;
       default:
+    }
+  };
+
+  showAccountColumn = () => {
+    const accountId = this.props.accountId;
+    return !accountId || SPECIAL_VIEW_IDS.includes(accountId);
+  };
+
+  onManageColumns = () => {
+    const columns = this.props.transactionColumns
+      .filter(
+        column =>
+          (column.id !== 'account' || this.showAccountColumn()) &&
+          (column.id !== 'balance' || this.canCalculateBalance()),
+      )
+      .map(column => {
+        // Balance and cleared visibility can be temporarily overridden in
+        // component state (e.g. while reconciling) and may still come from
+        // the old per-account prefs, so state is the source of truth here.
+        if (column.id === 'balance') {
+          return { ...column, hidden: !this.state.showBalances };
+        }
+        if (column.id === 'cleared') {
+          // During reconciliation the cleared column is temporarily forced
+          // visible, so show the user's underlying preference instead
+          const showCleared =
+            this.state.reconcileAmount != null
+              ? this.state.prevShowCleared
+              : this.state.showCleared;
+          return { ...column, hidden: !showCleared };
+        }
+        // Group visibility may come from the legacy pref fallback rather
+        // than the saved config, so the resolved prop is the source of truth
+        if (column.id === 'group') {
+          return { ...column, hidden: !this.props.showGroup };
+        }
+        return column;
+      });
+
+    this.props.dispatch(
+      pushModal({
+        modal: {
+          name: 'transaction-table-columns',
+          options: {
+            columns,
+            onSave: this.onSaveColumns,
+          },
+        },
+      }),
+    );
+  };
+
+  onSaveColumns = (columns: TransactionTableColumn[], applyToAll: boolean) => {
+    // Columns that aren't managed in the current view (e.g. the account
+    // column on a single-account page) keep their previous position and
+    // visibility so a save here doesn't clobber them.
+    const merged = [...columns];
+    this.props.transactionColumns.forEach((column, index) => {
+      if (!merged.some(c => c.id === column.id)) {
+        merged.splice(Math.min(index, merged.length), 0, column);
+      }
+    });
+
+    this.props.saveColumns(merged, applyToAll);
+
+    // Toggling the balance column changes which queries run, so mirror the
+    // change into component state and refetch when needed.
+    const balance = columns.find(column => column.id === 'balance');
+    const isBalanceVisible = balance && !balance.hidden;
+    if (balance && isBalanceVisible !== !!this.state.showBalances) {
+      if (!isBalanceVisible) {
+        this.setState({ showBalances: false, balances: null });
+      } else {
+        this.setState(
+          {
+            transactions: [],
+            filterConditions: [],
+            search: '',
+            sort: null,
+            showBalances: true,
+          },
+          () => {
+            this.fetchTransactions();
+          },
+        );
+      }
+    }
+
+    const cleared = columns.find(column => column.id === 'cleared');
+    const isClearedVisible = cleared && !cleared.hidden;
+    if (cleared && isClearedVisible !== !!this.state.showCleared) {
+      // Also update prevShowCleared so finishing a reconciliation restores
+      // the visibility chosen here, not the stale pre-reconcile value
+      this.setState({
+        showCleared: isClearedVisible,
+        prevShowCleared: isClearedVisible,
+      });
     }
   };
 
@@ -950,36 +1287,14 @@ class AccountInternal extends PureComponent<
   };
 
   lockTransactions = async () => {
+    const { accountId } = this.props;
+    if (!accountId) {
+      return;
+    }
+
     this.setState({ workingHard: true });
 
-    const { accountId } = this.props;
-
-    const { data } = await aqlQuery(
-      q('transactions')
-        .filter({ cleared: true, reconciled: false, account: accountId })
-        .select('*')
-        .options({ splits: 'grouped' }),
-    );
-    let transactions = ungroupTransactions(data);
-
-    const changes: { updated: Array<Partial<TransactionEntity>> } = {
-      updated: [],
-    };
-
-    transactions.forEach(trans => {
-      const { diff } = updateTransaction(transactions, {
-        ...trans,
-        reconciled: true,
-      });
-
-      transactions = applyChanges(diff, transactions);
-
-      changes.updated = changes.updated
-        ? changes.updated.concat(diff.updated)
-        : diff.updated;
-    });
-
-    await send('transactions-batch-update', changes);
+    await reconciliation.lockTransactions(accountId);
     await this.refetchTransactions();
   };
 
@@ -1002,27 +1317,9 @@ class AccountInternal extends PureComponent<
 
     const { reconcileAmount } = this.state;
 
-    const { data } = await aqlQuery(
-      q('transactions')
-        .filter({ cleared: true, account: accountId })
-        .select('*')
-        .options({ splits: 'grouped' }),
+    await reconciliation.finishReconciliation(account.id, reconcileAmount, () =>
+      this.lockTransactions(),
     );
-    const transactions = ungroupTransactions(data);
-
-    let cleared = 0;
-
-    transactions.forEach(trans => {
-      if (!trans.is_parent) {
-        cleared += trans.amount;
-      }
-    });
-
-    const targetDiff = (reconcileAmount || 0) - cleared;
-
-    if (targetDiff === 0) {
-      await this.lockTransactions();
-    }
 
     const lastReconciled = new Date().getTime().toString();
     this.props.onUpdateAccount({ ...account, last_reconciled: lastReconciled });
@@ -1034,36 +1331,20 @@ class AccountInternal extends PureComponent<
   };
 
   onCreateReconciliationTransaction = async (diff: number) => {
-    // Create a new reconciliation transaction
-    const reconciliationTransactions = realizeTempTransactions([
-      {
-        id: 'temp',
-        account: this.props.accountId!,
-        cleared: true,
-        reconciled: false,
-        amount: diff,
-        date: currentDay(),
-        notes: t('Reconciliation balance adjustment'),
-      },
-    ]);
+    const { accountId } = this.props;
+    if (!accountId) {
+      return;
+    }
 
-    // Optimistic UI: update the transaction list before sending the data to the database
-    this.setState(state => ({
-      transactions: [...reconciliationTransactions, ...state.transactions],
-    }));
-
-    // run rules on the reconciliation transaction
-    const ruledTransactions = await Promise.all(
-      reconciliationTransactions.map(transaction =>
-        send('rules-run', { transaction }),
-      ),
+    await reconciliation.createReconciliationTransaction(
+      accountId,
+      diff,
+      // Optimistic UI: update the transaction list before sending the data to the database
+      reconciliationTransactions =>
+        this.setState(state => ({
+          transactions: [...reconciliationTransactions, ...state.transactions],
+        })),
     );
-
-    // sync the reconciliation transaction
-    await send('transactions-batch-update', {
-      added: ruledTransactions.filter(trans => !trans.tombstone),
-      deleted: ruledTransactions.filter(trans => trans.tombstone),
-    });
     await this.refetchTransactions();
   };
 
@@ -1727,6 +2008,9 @@ class AccountInternal extends PureComponent<
       showCleared,
       showReconciled,
       filteredAmount,
+      autoClassifying,
+      autoClassificationById = {},
+      recentClassifications = [],
     } = this.state;
 
     const account = accounts.find(account => account.id === accountId);
@@ -1760,10 +2044,47 @@ class AccountInternal extends PureComponent<
       return !item._unmatched;
     };
 
+    const mergedTransactions = [...transactions];
+    for (const [id, classification] of Object.entries(autoClassificationById)) {
+      if (classification.transaction) {
+        const exists = mergedTransactions.some(t => t.id === id);
+        if (!exists) {
+          const tx = {
+            ...classification.transaction,
+            category:
+              classification.category || classification.transaction.category,
+          };
+
+          const insertIdx = mergedTransactions.findIndex(t => {
+            if (t.date !== tx.date) {
+              return t.date < tx.date;
+            }
+            if (t.sort_order !== tx.sort_order) {
+              return (t.sort_order || 0) < (tx.sort_order || 0);
+            }
+            return t.id < tx.id;
+          });
+          if (insertIdx === -1) {
+            mergedTransactions.push(tx);
+          } else {
+            mergedTransactions.splice(insertIdx, 0, tx);
+          }
+        }
+      }
+    }
+
+    const displayedTransactions = mergedTransactions.map(t => {
+      const classification = autoClassificationById[t.id];
+      if (classification && classification.category) {
+        return { ...t, category: classification.category };
+      }
+      return t;
+    });
+
     return (
       <AllTransactions
         account={account}
-        transactions={transactions}
+        transactions={displayedTransactions}
         balances={balances}
         showBalances={showBalances}
         filtered={transactionsFiltered}
@@ -1771,7 +2092,16 @@ class AccountInternal extends PureComponent<
         {(allTransactions, allBalances) => (
           <SelectedProviderWithItems
             name="transactions"
-            items={allTransactions}
+            // When reconciled transactions are hidden they are still
+            // loaded (e.g. to calculate running balances), but they must
+            // not be selectable. Mirror the filtering the transaction
+            // table applies when rendering so that range selection
+            // (shift+click) only covers visible transactions.
+            items={
+              showReconciled
+                ? allTransactions
+                : allTransactions.filter(t => !t.reconciled)
+            }
             fetchAllIds={this.fetchAllIds}
             registerDispatch={dispatch => (this.dispatchSelected = dispatch)}
             selectAllFilter={selectAllFilter}
@@ -1781,6 +2111,7 @@ class AccountInternal extends PureComponent<
                 tableRef={this.table}
                 isNameEditable={isNameEditable ?? false}
                 workingHard={workingHard ?? false}
+                autoClassifying={autoClassifying}
                 accountId={accountId}
                 account={account}
                 filterId={filterId}
@@ -1789,13 +2120,11 @@ class AccountInternal extends PureComponent<
                 accountsSyncing={accountsSyncing}
                 accounts={accounts}
                 transactions={transactions}
-                showBalances={showBalances ?? false}
                 showExtraBalances={showExtraBalances ?? false}
-                showCleared={showCleared ?? false}
+                showCategorizationDetails={this.props.showCategorizationDetails}
                 showReconciled={showReconciled ?? false}
                 showEmptyMessage={showEmptyMessage ?? false}
                 balanceQuery={balanceQuery}
-                canCalculateBalance={this?.canCalculateBalance ?? undefined}
                 filteredAmount={filteredAmount}
                 isFiltered={transactionsFiltered ?? false}
                 isSorted={this.state.sort !== null}
@@ -1818,6 +2147,7 @@ class AccountInternal extends PureComponent<
                 }
                 onSync={this.onSync}
                 onImport={this.onImport}
+                onAutoClassify={this.onAutoClassify}
                 onBatchDelete={this.onBatchDelete}
                 onBatchDuplicate={this.onBatchDuplicate}
                 onRunRules={this.onRunRules}
@@ -1846,6 +2176,7 @@ class AccountInternal extends PureComponent<
                   account={account}
                   transactions={transactions}
                   allTransactions={allTransactions}
+                  autoClassificationById={autoClassificationById}
                   loadMoreTransactions={() =>
                     this.paged && this.paged.fetchNext()
                   }
@@ -1857,12 +2188,12 @@ class AccountInternal extends PureComponent<
                   showBalances={!!allBalances}
                   showReconciled={showReconciled}
                   showCleared={!!showCleared}
-                  showAccount={
-                    !accountId ||
-                    accountId === 'offbudget' ||
-                    accountId === 'onbudget' ||
-                    accountId === 'uncategorized'
+                  showCategorizationDetails={
+                    this.props.showCategorizationDetails
                   }
+                  showGroup={this.props.showGroup}
+                  showAccount={this.showAccountColumn()}
+                  columnOrder={this.props.columnOrder}
                   allowReorder={
                     !!accountId &&
                     accountId !== 'offbudget' &&
@@ -1920,6 +2251,15 @@ class AccountInternal extends PureComponent<
                   onApplyFilter={this.onApplyFilter}
                 />
               </View>
+
+              {recentClassifications && recentClassifications.length > 0 && (
+                <AutoClassificationToast
+                  recentClassifications={recentClassifications}
+                  autoClassifying={autoClassifying}
+                  dateFormat={dateFormat || 'MM/dd/yyyy'}
+                  onClose={() => this.setState({ recentClassifications: [] })}
+                />
+              )}
             </View>
           </SelectedProviderWithItems>
         )}
@@ -1984,21 +2324,26 @@ export function Account() {
   const dateFormat = useDateFormat() || 'MM/dd/yyyy';
   const [hideFraction] = useSyncedPref('hideFraction');
   const [expandSplits] = useLocalPref('expand-splits');
-  const [showBalances, setShowBalances] = useSyncedPref(
-    `show-balances-${params.id}`,
-  );
   const [showNetWorthChart, setShowNetWorthChart] = useSyncedPref(
     `show-account-${params.id}-net-worth-chart`,
-  );
-  const [hideCleared, setHideCleared] = useSyncedPref(
-    `hide-cleared-${params.id}`,
   );
   const [hideReconciled, setHideReconciled] = useSyncedPref(
     `hide-reconciled-${params.id}`,
   );
+  const [showCategorizationDetails, setShowCategorizationDetails] =
+    useSyncedPref(`show-categorization-details-${params.id || 'all-accounts'}`);
   const [showExtraBalances, setShowExtraBalances] = useSyncedPref(
     `show-extra-balances-${params.id || 'all-accounts'}`,
   );
+  const {
+    transactionColumns,
+    columnOrder,
+    showBalances,
+    showCleared,
+    showGroup,
+    saveColumns,
+  } = useTransactionTableColumns(params.id);
+
   const modalShowing = useSelector(state => state.modals.modalStack.length > 0);
   const accountsSyncing = useSelector(state => state.account.accountsSyncing);
   const filterConditions = location?.state?.filterConditions || [];
@@ -2041,20 +2386,26 @@ export function Account() {
             dateFormat={dateFormat}
             hideFraction={String(hideFraction) === 'true'}
             expandSplits={expandSplits}
-            showBalances={String(showBalances) === 'true'}
-            setShowBalances={showBalances =>
-              setShowBalances(String(showBalances))
-            }
+            showBalances={showBalances}
             showNetWorthChart={String(showNetWorthChart) === 'true'}
             setShowNetWorthChart={val => setShowNetWorthChart(String(val))}
-            showCleared={String(hideCleared) !== 'true'}
-            setShowCleared={val => setHideCleared(String(!val))}
+            showCleared={showCleared}
+            showCategorizationDetails={
+              String(showCategorizationDetails) === 'true'
+            }
+            setShowCategorizationDetails={val =>
+              setShowCategorizationDetails(String(val))
+            }
             showReconciled={String(hideReconciled) !== 'true'}
             setShowReconciled={val => setHideReconciled(String(!val))}
+            showGroup={showGroup}
             showExtraBalances={String(showExtraBalances) === 'true'}
             setShowExtraBalances={extraBalances =>
               setShowExtraBalances(String(extraBalances))
             }
+            transactionColumns={transactionColumns}
+            columnOrder={columnOrder}
+            saveColumns={saveColumns}
             payees={payees}
             modalShowing={modalShowing}
             accountsSyncing={accountsSyncing}
@@ -2073,5 +2424,218 @@ export function Account() {
         </SplitsExpandedProvider>
       </SchedulesProvider>
     </ErrorBoundary>
+  );
+}
+
+type AutoClassificationToastProps = {
+  recentClassifications: Array<{
+    id: string;
+    date: string;
+    payee: string;
+    amount: number;
+    categoryName: string;
+    notes: string;
+  }>;
+  autoClassifying: boolean;
+  dateFormat: string;
+  onClose: () => void;
+};
+
+export function AutoClassificationToast({
+  recentClassifications,
+  autoClassifying,
+  dateFormat,
+  onClose,
+}: AutoClassificationToastProps) {
+  return (
+    <View
+      style={{
+        position: 'fixed',
+        bottom: 20,
+        right: 20,
+        width: 680,
+        maxWidth: 'calc(100% - 40px)',
+        backgroundColor: theme.noticeBackgroundLight,
+        borderTop: `4px solid ${theme.noticeBorder}`,
+        borderRadius: 8,
+        padding: '16px 20px',
+        zIndex: 10000,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        color: theme.noticeText,
+        ...styles.shadowLarge,
+      }}
+    >
+      <View
+        style={{
+          display: 'flex',
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <View
+          style={{
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <Text style={{ fontWeight: 700, fontSize: 14 }}>
+            {autoClassifying ? (
+              <Trans>Auto-classifying transactions...</Trans>
+            ) : (
+              <Trans>Auto-classification completed</Trans>
+            )}
+          </Text>
+          {autoClassifying && (
+            <AnimatedLoading
+              style={{ width: 16, height: 16, color: theme.noticeBorder }}
+            />
+          )}
+        </View>
+        <Button
+          variant="bare"
+          aria-label={t('Close')}
+          style={{
+            padding: 4,
+            color: 'currentColor',
+            opacity: 0.7,
+            cursor: 'pointer',
+          }}
+          onPress={onClose}
+        >
+          <SvgDelete style={{ width: 10, height: 10 }} />
+        </Button>
+      </View>
+
+      <View style={{ overflowX: 'auto' }}>
+        <table
+          style={{
+            width: '100%',
+            borderCollapse: 'collapse',
+            fontSize: 12,
+            textAlign: 'left',
+          }}
+        >
+          <thead>
+            <tr
+              style={{
+                borderBottom: `1px solid ${theme.noticeBorder}40`,
+                opacity: 0.8,
+              }}
+            >
+              <th style={{ padding: '6px 8px', fontWeight: 600 }}>
+                <Trans>Date</Trans>
+              </th>
+              <th style={{ padding: '6px 8px', fontWeight: 600 }}>
+                <Trans>Payee</Trans>
+              </th>
+              <th
+                style={{
+                  padding: '6px 8px',
+                  fontWeight: 600,
+                  textAlign: 'right',
+                }}
+              >
+                <Trans>Amount</Trans>
+              </th>
+              <th style={{ padding: '6px 8px', fontWeight: 600 }}>
+                <Trans>Assigned Category</Trans>
+              </th>
+              <th style={{ padding: '6px 8px', fontWeight: 600 }}>
+                <Trans>Reason/Notes</Trans>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {recentClassifications.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={5}
+                  style={{
+                    padding: '16px 8px',
+                    textAlign: 'center',
+                    fontStyle: 'italic',
+                    opacity: 0.7,
+                  }}
+                >
+                  <Trans>Analyzing transactions...</Trans>
+                </td>
+              </tr>
+            ) : (
+              recentClassifications.map(row => {
+                let formattedDate = row.date;
+                try {
+                  formattedDate = formatDate(parseISO(row.date), dateFormat);
+                } catch {
+                  // Fallback
+                }
+                return (
+                  <tr
+                    key={row.id}
+                    style={{
+                      borderBottom: `1px solid ${theme.noticeBorder}15`,
+                    }}
+                  >
+                    <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>
+                      {formattedDate}
+                    </td>
+                    <td
+                      style={{
+                        padding: '8px',
+                        maxWidth: 120,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                      title={row.payee}
+                    >
+                      {row.payee}
+                    </td>
+                    <td
+                      style={{
+                        padding: '8px',
+                        textAlign: 'right',
+                        whiteSpace: 'nowrap',
+                        ...styles.tnum,
+                        fontWeight: 500,
+                      }}
+                    >
+                      {integerToCurrency(row.amount)}
+                    </td>
+                    <td style={{ padding: '8px', whiteSpace: 'nowrap' }}>
+                      <span
+                        style={{
+                          backgroundColor: 'rgba(0, 0, 0, 0.06)',
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                          fontSize: 11,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {row.categoryName}
+                      </span>
+                    </td>
+                    <td
+                      style={{
+                        padding: '8px',
+                        fontSize: 11,
+                        opacity: 0.9,
+                        lineHeight: '1.3em',
+                      }}
+                    >
+                      {row.notes}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </View>
+    </View>
   );
 }

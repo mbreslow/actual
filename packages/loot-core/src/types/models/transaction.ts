@@ -5,6 +5,8 @@ import type { CategoryEntity } from './category';
 import type { PayeeEntity } from './payee';
 import type { ScheduleEntity } from './schedule';
 
+export type CategorizationSource = 'manual' | 'ai' | 'rule' | 'imported';
+
 export type TransactionEntity = {
   id: string;
   is_parent?: boolean;
@@ -12,6 +14,9 @@ export type TransactionEntity = {
   parent_id?: TransactionEntity['id'];
   account: AccountEntity['id'];
   category?: CategoryEntity['id'];
+  categorization_source?: CategorizationSource | null;
+  categorization_date?: string | null;
+  categorization_note?: string | null;
   amount: IntegerAmount;
   payee?: PayeeEntity['id'] | null;
   notes?: string;

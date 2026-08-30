@@ -28,7 +28,7 @@ export const setItem: T.SetItem = async function (key, value) {
   const transaction = db.transaction(['asyncStorage'], 'readwrite');
   const objectStore = transaction.objectStore('asyncStorage');
 
-  void new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const req = objectStore.put(value, key);
     req.onerror = e => reject(e);
     req.onsuccess = () => resolve(undefined);

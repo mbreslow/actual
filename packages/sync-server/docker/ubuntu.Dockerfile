@@ -1,16 +1,24 @@
-FROM node:22-bookworm AS builder
+FROM node:24-bookworm AS builder
 
 # Install required packages
 RUN apt-get update && apt-get install -y openssl
+RUN corepack enable
 
 WORKDIR /app
 
 COPY .yarn ./.yarn
-COPY yarn.lock package.json .yarnrc.yml ./
+COPY yarn.lock package.json .yarnrc.yml tsconfig.json tsconfig.root.json ./
 COPY packages ./packages
 
 # Avoiding memory issues with ARMv7
 RUN if [ "$(uname -m)" = "armv7l" ]; then yarn config set taskPoolConcurrency 2; yarn config set networkConcurrency 5; fi
+
+# Build the web client and sync server from the checked-out source so the
+# published image does not depend on stale local build artifacts.
+RUN yarn install --immutable
+RUN yarn workspace plugins-service build
+RUN yarn workspace @actual-app/web build:browser
+RUN yarn workspace @actual-app/sync-server build
 
 # Focus the workspaces in production mode
 RUN yarn workspaces focus @actual-app/sync-server --production
@@ -25,7 +33,7 @@ RUN find node_modules/@actual-app -maxdepth 2 -type d \
     \( -name src -o -name e2e -o -name __tests__ -o -name __mocks__ -o -name tests -o -name test -o -name build-stats \) \
     -exec rm -rf {} +
 
-FROM node:22-bookworm-slim AS prod
+FROM node:24-bookworm-slim AS prod
 
 # Minimal runtime dependencies
 RUN apt-get update && apt-get install tini && apt-get clean -y && rm -rf /var/lib/apt/lists/*
@@ -43,6 +51,7 @@ ENV NODE_ENV=production
 
 # sync-server entry flattened at /app so CMD stays `node app.js`.
 COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/packages/desktop-client/build ./node_modules/@actual-app/web/build
 COPY --from=builder /app/packages/sync-server/package.json ./
 COPY --from=builder /app/packages/sync-server/build ./
 

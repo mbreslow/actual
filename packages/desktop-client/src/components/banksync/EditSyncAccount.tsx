@@ -45,6 +45,7 @@ const mappableFields: MappableField[] = [
       'booking_date',
       'value_date',
       'transaction_date',
+      'originalDate',
     ],
   },
   {
@@ -159,6 +160,8 @@ export function EditSyncAccount({ account }: EditSyncAccountProps) {
     setImportTransactions,
     updateDates,
     setUpdateDates,
+    classifyWithLLM,
+    setClassifyWithLLM,
     mappings,
     setMapping,
     fields,
@@ -240,6 +243,8 @@ export function EditSyncAccount({ account }: EditSyncAccountProps) {
             setImportTransactions={setImportTransactions}
             updateDates={updateDates}
             setUpdateDates={setUpdateDates}
+            classifyWithLLM={classifyWithLLM}
+            setClassifyWithLLM={setClassifyWithLLM}
             helpMode="desktop"
           />
 

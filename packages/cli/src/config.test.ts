@@ -1,4 +1,5 @@
-import { homedir } from 'os';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 
 import { resolveConfig } from './config';
@@ -23,11 +24,16 @@ describe('resolveConfig', () => {
   const savedEnv: Record<string, string | undefined> = {};
   const envKeys = [
     'ACTUAL_SERVER_URL',
+    'ACTUAL_SERVER_URL_FILE',
     'ACTUAL_PASSWORD',
+    'ACTUAL_PASSWORD_FILE',
     'ACTUAL_SESSION_TOKEN',
+    'ACTUAL_SESSION_TOKEN_FILE',
     'ACTUAL_SYNC_ID',
+    'ACTUAL_SYNC_ID_FILE',
     'ACTUAL_DATA_DIR',
     'ACTUAL_ENCRYPTION_PASSWORD',
+    'ACTUAL_ENCRYPTION_PASSWORD_FILE',
     'ACTUAL_CACHE_TTL',
     'ACTUAL_LOCK_TIMEOUT',
     'ACTUAL_NO_LOCK',
@@ -88,6 +94,34 @@ describe('resolveConfig', () => {
       expect(config.serverUrl).toBe('http://env');
       expect(config.password).toBe('envpw');
       expect(config.encryptionPassword).toBe('env-enc');
+    });
+
+    it('secret file env vars are used when direct env vars are absent', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'actual-cli-config-'));
+      try {
+        const serverUrlFile = join(dir, 'server-url');
+        const passwordFile = join(dir, 'password');
+        const syncIdFile = join(dir, 'sync-id');
+        const encryptionPasswordFile = join(dir, 'encryption-password');
+        writeFileSync(serverUrlFile, 'http://file-env\n');
+        writeFileSync(passwordFile, 'file-env-pw\n');
+        writeFileSync(syncIdFile, 'sync-from-file\n');
+        writeFileSync(encryptionPasswordFile, 'enc-from-file\n');
+
+        process.env.ACTUAL_SERVER_URL_FILE = serverUrlFile;
+        process.env.ACTUAL_PASSWORD_FILE = passwordFile;
+        process.env.ACTUAL_SYNC_ID_FILE = syncIdFile;
+        process.env.ACTUAL_ENCRYPTION_PASSWORD_FILE = encryptionPasswordFile;
+
+        const config = await resolveConfig({});
+
+        expect(config.serverUrl).toBe('http://file-env');
+        expect(config.password).toBe('file-env-pw');
+        expect(config.syncId).toBe('sync-from-file');
+        expect(config.encryptionPassword).toBe('enc-from-file');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it('file config is used when no CLI opts or env vars', async () => {

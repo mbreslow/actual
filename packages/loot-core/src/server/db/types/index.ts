@@ -31,7 +31,18 @@ export type DbAccount = {
     | 'failed'
     | 'reauth-required'
     | 'attention-required'
+    | 'rate-limit-exceeded'
+    | 'timed-out'
+    | 'account-missing'
     | null;
+  account_group_id?: DbAccountGroup['id'] | null;
+};
+
+export type DbAccountGroup = {
+  id: string;
+  name: string;
+  sort_order: number;
+  tombstone: 1 | 0;
 };
 
 export type DbBank = {
@@ -137,6 +148,7 @@ export type DbSchedule = {
   posts_transaction: 1 | 0;
   custom_upcoming_length: string | null;
   tombstone: 1 | 0;
+  sort_order: number;
 };
 
 // type DbScheduleJsonPath = {
@@ -175,6 +187,9 @@ export type DbTransaction = {
   sort_order: number;
   parent_id?: DbTransaction['id'] | null;
   category?: DbCategory['id'] | null;
+  categorization_source?: 'manual' | 'ai' | 'rule' | 'imported' | null;
+  categorization_date?: number | null;
+  categorization_note?: string | null;
   description?: string | null;
   notes?: string | null;
   financial_id?: string | null;
@@ -283,6 +298,9 @@ export type DbViewTransactionInternal = {
   amount: DbTransaction['amount'];
   parent_id: DbTransaction['parent_id'] | null;
   category: DbCategory['id'] | null;
+  categorization_source: DbTransaction['categorization_source'];
+  categorization_date: DbTransaction['categorization_date'];
+  categorization_note: DbTransaction['categorization_note'];
   payee: DbPayee['id'] | null;
   notes: DbTransaction['notes'] | null;
   imported_id: DbTransaction['financial_id'] | null;
@@ -349,6 +367,7 @@ export type DbViewSchedule = {
   _date: JsonString;
   _conditions: JsonString;
   _actions: JsonString;
+  _has_splits: 0 | 1;
 };
 
 export type DbTag = {
@@ -358,4 +377,12 @@ export type DbTag = {
   description?: string | null;
   tombstone: 1 | 0;
   hidden?: 1 | 0;
+};
+
+export type DbAIClassificationMemory = {
+  id: string;
+  imported_payee: string | null;
+  payee_name: string | null;
+  category_id: string;
+  tombstone: 1 | 0;
 };

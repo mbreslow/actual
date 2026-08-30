@@ -34,6 +34,15 @@ process.on('unhandledRejection', reason => {
 
 global.IS_TESTING = true;
 
+// Mock global navigator for Vitest node tests to prevent ReferenceError when importing platform-dependent files
+Object.defineProperty(globalThis, 'navigator', {
+  configurable: true,
+  value: {
+    platform: 'linux',
+    userAgent: 'node',
+  },
+});
+
 let _time = 123456789;
 const _oldDateNow = global.Date.now;
 global.Date.now = () => _time;
