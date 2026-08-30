@@ -14,7 +14,8 @@ import {
 } from '#server/errors';
 import { app as mainApp } from '#server/main-app';
 import { mutator } from '#server/mutators';
-import { get, post } from '#server/post';
+import { del, get, post } from '#server/post';
+import { getPrefs } from '#server/prefs';
 import { getServer } from '#server/server-config';
 import { batchMessages } from '#server/sync';
 import { undoable, withUndo } from '#server/undo';
@@ -25,6 +26,7 @@ import { amountToInteger } from '#shared/util';
 import type { ImportTransactionsOpts } from '#types/api-handlers';
 import type {
   AccountEntity,
+  BankSyncProviderStatus,
   BankSyncStatus,
   CategoryEntity,
   GoCardlessToken,
@@ -93,12 +95,14 @@ async function updateAccount({
   id,
   name,
   last_reconciled,
+  account_group_id,
 }: Pick<AccountEntity, 'id' | 'name'> &
-  Partial<Pick<AccountEntity, 'last_reconciled'>>) {
+  Partial<Pick<AccountEntity, 'last_reconciled' | 'account_group_id'>>) {
   await db.update('accounts', {
     id,
     name,
     ...(last_reconciled && { last_reconciled }),
+    ...(account_group_id !== undefined && { account_group_id }),
   });
   return {};
 }
@@ -127,6 +131,7 @@ async function getAccounts(): Promise<AccountEntity[]> {
         account_sync_source: dbAccount.account_sync_source ?? null,
         last_sync: dbAccount.last_sync ?? null,
         bank_sync_status: dbAccount.bank_sync_status ?? null,
+        account_group_id: dbAccount.account_group_id ?? null,
       }) satisfies AccountEntity,
   );
 }
@@ -317,6 +322,7 @@ async function linkPluggyAiAccount({
   externalAccount: SyncServerPluggyAiAccount;
 }) {
   let id;
+  const fileId = getPrefs()?.cloudFileId;
 
   const institution = {
     // Persist a null name when the provider doesn't report an institution, so
@@ -372,6 +378,7 @@ async function linkPluggyAiAccount({
     bank.bank_id,
     startingDate,
     startingBalance,
+    fileId,
   );
 
   await handleSyncResponse(syncRes, id);
@@ -711,9 +718,11 @@ async function moveAccount({
 async function setSecret({
   name,
   value,
+  fileId = null,
 }: {
   name: string;
   value: string | null;
+  fileId?: string | null;
 }) {
   const userToken = await asyncStorage.getItem('user-token');
 
@@ -726,16 +735,27 @@ async function setSecret({
     throw new Error('Failed to get server config.');
   }
 
+  const headers = {
+    'X-ACTUAL-TOKEN': userToken,
+    ...(fileId ? { 'X-Actual-File-Id': fileId } : {}),
+  };
+
   try {
+    if (value === null) {
+      return await del(
+        serverConfig.BASE_SERVER + '/secret/' + name,
+        {},
+        headers,
+      );
+    }
+
     return await post(
       serverConfig.BASE_SERVER + '/secret',
       {
         name,
         value,
       },
-      {
-        'X-ACTUAL-TOKEN': userToken,
-      },
+      headers,
     );
   } catch (error) {
     return {
@@ -890,7 +910,7 @@ async function simpleFinStatus() {
   );
 }
 
-async function pluggyAiStatus() {
+async function pluggyAiStatus(): Promise<BankSyncProviderStatus> {
   const userToken = await asyncStorage.getItem('user-token');
 
   if (!userToken) {
@@ -902,11 +922,13 @@ async function pluggyAiStatus() {
     throw new Error('Failed to get server config.');
   }
 
+  const fileId = getPrefs()?.cloudFileId;
   return post(
     serverConfig.PLUGGYAI_SERVER + '/status',
     {},
     {
       'X-ACTUAL-TOKEN': userToken,
+      ...(fileId ? { 'X-Actual-File-Id': fileId } : {}),
     },
   );
 }
@@ -971,11 +993,13 @@ async function pluggyAiAccounts() {
   }
 
   try {
+    const fileId = getPrefs()?.cloudFileId;
     return await post(
       serverConfig.PLUGGYAI_SERVER + '/accounts',
       {},
       {
         'X-ACTUAL-TOKEN': userToken,
+        ...(fileId ? { 'X-Actual-File-Id': fileId } : {}),
       },
       60000,
     );
@@ -1057,11 +1081,13 @@ async function enableBankingStartAuth({
   country,
   redirectUrl,
   maxConsentValidity,
+  psuType = 'personal',
 }: {
   aspspId: string;
   country: string;
   redirectUrl: string;
   maxConsentValidity?: number;
+  psuType?: 'personal' | 'business';
 }) {
   const userToken = await asyncStorage.getItem('user-token');
 
@@ -1086,7 +1112,12 @@ async function enableBankingStartAuth({
 
   return post(
     serverConfig.ENABLEBANKING_SERVER + '/start-auth',
-    { aspsp: { name: aspspId, country }, redirectUrl, maxConsentValidity },
+    {
+      aspsp: { name: aspspId, country },
+      redirectUrl,
+      maxConsentValidity,
+      psuType,
+    },
     {
       'X-ACTUAL-TOKEN': userToken,
     },
@@ -1369,6 +1400,18 @@ function getBankSyncStatusFromError(
     if (err.category === 'ACCOUNT_NEEDS_ATTENTION') {
       return 'attention-required';
     }
+
+    if (err.category === 'RATE_LIMIT_EXCEEDED') {
+      return 'rate-limit-exceeded';
+    }
+
+    if (err.category === 'TIMED_OUT') {
+      return 'timed-out';
+    }
+
+    if (err.category === 'ACCOUNT_MISSING') {
+      return 'account-missing';
+    }
   }
 
   return 'failed';
@@ -1413,6 +1456,7 @@ async function accountsBankSync({
   const newTransactions: Array<TransactionEntity['id']> = [];
   const matchedTransactions: Array<TransactionEntity['id']> = [];
   const updatedAccounts: Array<AccountEntity['id']> = [];
+  const fileId = getPrefs()?.cloudFileId;
 
   for (const acct of accounts) {
     if (acct.bankId && acct.account_id) {
@@ -1424,6 +1468,9 @@ async function accountsBankSync({
           acct.id,
           acct.account_id,
           acct.bankId,
+          undefined,
+          undefined,
+          fileId,
         );
 
         const syncResponseData = await handleSyncResponse(
@@ -1599,16 +1646,25 @@ async function importTransactions({
     throw APIError('transactions-import: accountId must be an id');
   }
 
+  const payeeNameNormalization = opts?.payeeNameNormalization ?? 'title-case';
+  if (!bankSync.PAYEE_NAME_NORMALIZATIONS.includes(payeeNameNormalization)) {
+    throw APIError(
+      `transactions-import: payeeNameNormalization must be one of ${bankSync.PAYEE_NAME_NORMALIZATIONS.join(
+        ', ',
+      )}, got '${String(payeeNameNormalization)}'`,
+    );
+  }
+
   try {
     const reconciled = await bankSync.reconcileTransactions(
       accountId,
       transactions,
-      false,
-      true,
-      isPreview,
-      opts?.defaultCleared,
-      false,
-      opts?.reimportDeleted,
+      {
+        isPreview,
+        defaultCleared: opts?.defaultCleared,
+        reimportDeleted: opts?.reimportDeleted,
+        payeeNameNormalization,
+      },
     );
     return {
       errors: [],

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+
 import type { ReactNode } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 
@@ -30,7 +31,7 @@ import { useFeatureFlag } from '#hooks/useFeatureFlag';
 import { useGlobalPref } from '#hooks/useGlobalPref';
 import { useMetadataPref } from '#hooks/useMetadataPref';
 import { useSyncedPref } from '#hooks/useSyncedPref';
-import { loadPrefs } from '#prefs/prefsSlice';
+import { loadPrefs, saveSyncedPrefs } from '#prefs/prefsSlice';
 import { useDispatch, useSelector } from '#redux';
 
 import { AuthSettings } from './AuthSettings';
@@ -710,9 +711,9 @@ export function Settings() {
 
   useEffect(() => {
     if (!isCurrencyExperimentalEnabled) {
-      setDefaultCurrencyCodePref('');
+      void dispatch(saveSyncedPrefs({ prefs: { defaultCurrencyCode: '' } }));
     }
-  }, [isCurrencyExperimentalEnabled, setDefaultCurrencyCodePref]);
+  }, [dispatch, isCurrencyExperimentalEnabled]);
 
   const { isNarrowWidth } = useResponsive();
 

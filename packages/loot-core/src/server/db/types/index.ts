@@ -31,7 +31,18 @@ export type DbAccount = {
     | 'failed'
     | 'reauth-required'
     | 'attention-required'
+    | 'rate-limit-exceeded'
+    | 'timed-out'
+    | 'account-missing'
     | null;
+  account_group_id?: DbAccountGroup['id'] | null;
+};
+
+export type DbAccountGroup = {
+  id: string;
+  name: string;
+  sort_order: number;
+  tombstone: 1 | 0;
 };
 
 export type DbBank = {
@@ -137,6 +148,7 @@ export type DbSchedule = {
   posts_transaction: 1 | 0;
   custom_upcoming_length: string | null;
   tombstone: 1 | 0;
+  sort_order: number;
 };
 
 // type DbScheduleJsonPath = {
@@ -355,6 +367,7 @@ export type DbViewSchedule = {
   _date: JsonString;
   _conditions: JsonString;
   _actions: JsonString;
+  _has_splits: 0 | 1;
 };
 
 export type DbTag = {

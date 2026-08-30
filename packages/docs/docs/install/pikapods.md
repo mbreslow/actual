@@ -29,7 +29,7 @@ You can leave the resources at their lowest setting (although you will need a no
 
 _Your browser does most of Actual's computation,_ so purchasing more resources for the server won't necessarily result in a better experience.
 
-After setting up your Pod, head over to our [Starting Fresh](/docs/getting-started/starting-fresh) guide to get started with
+After setting up your Pod, head over to our [Starting Fresh](../getting-started/starting-fresh.md) guide to get started with
 Actual Budget.
 
 ## A step by step guide to setting up Actual Budget with PikaPods
@@ -68,7 +68,7 @@ Simply put, _a Pod is a very tiny computer running in the cloud_. Typically, a P
 
 Multiple budgets can reside in one Pod running Actual. You do not need to set up a new Pod for each budget you create. The number of budgets is limited only by the storage capacity you assign to your Pod.
 
-If you [connect to your bank](/docs/advanced/bank-sync.md), note that all budgets in the same Pod share a single bank sync key.
+If you [connect to your bank](../advanced/bank-sync.md), note that all budgets in the same Pod share a single bank sync key.
 
 :::
 
@@ -112,7 +112,9 @@ Keep your Actual Budget password safe, as it cannot be retrieved. If you forget 
 
 ## Using a PWA (Progressive Web App) {#using-a-pwa}
 
-When using Actual Server over the internet, we suggest using a PWA web client. After you login and open Actual Budget, it's easy to set up a PWA from your browser of choice.
+Modern browsers let you install a website on your device so it behaves like a standalone app. This is known as a Progressive Web App (PWA). If you access Actual Server over the internet, installing it as a PWA gives you quicker access and an app-like experience.
+
+After logging in and opening Actual Budget, you can install it as a PWA directly from your browser.
 
 Here's some help with a few common desktop browsers.
 
@@ -132,4 +134,4 @@ For other browsers or browser/OS combinations, most search engines or the browse
 
 ## Getting started with Actual Budget
 
-Go to our [Starting Fresh](/docs/getting-started/starting-fresh) guide to get started with Actual Budget.
+Go to our [Starting Fresh](../getting-started/starting-fresh.md) guide to get started with Actual Budget.

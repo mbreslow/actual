@@ -279,6 +279,7 @@ async function downloadSimpleFinTransactions(
 async function downloadPluggyAiTransactions(
   acctId: AccountEntity['id'],
   since: string,
+  fileId?: string,
 ) {
   const userToken = await asyncStorage.getItem('user-token');
   if (!userToken) return;
@@ -293,6 +294,7 @@ async function downloadPluggyAiTransactions(
     },
     {
       'X-ACTUAL-TOKEN': userToken,
+      ...(fileId ? { 'X-Actual-File-Id': fileId } : {}),
     },
     60000,
   );
@@ -412,10 +414,34 @@ async function resolvePayee(trans, payeeName, payeesToCreate) {
   return trans.payee;
 }
 
+export const PAYEE_NAME_NORMALIZATIONS = ['original', 'title-case'] as const;
+export type PayeeNameNormalization = (typeof PAYEE_NAME_NORMALIZATIONS)[number];
+
+function normalizePayeeName(
+  payeeName: string,
+  normalization: PayeeNameNormalization,
+): string {
+  switch (normalization) {
+    case 'original':
+      return payeeName;
+    case 'title-case':
+      return title(payeeName);
+    default:
+      normalization satisfies never;
+      throw new Error(
+        `Unknown payee name normalization: ${String(normalization)}`,
+      );
+  }
+}
+
 async function normalizeTransactions(
   transactions,
   acctId,
-  { rawPayeeName = false } = {},
+  {
+    payeeNameNormalization = 'title-case',
+  }: {
+    payeeNameNormalization?: PayeeNameNormalization;
+  } = {},
 ) {
   const payeesToCreate = new Map();
 
@@ -453,7 +479,7 @@ async function normalizeTransactions(
       if (trimmed === '') {
         payee_name = null;
       } else {
-        payee_name = rawPayeeName ? trimmed : title(trimmed);
+        payee_name = normalizePayeeName(trimmed, payeeNameNormalization);
       }
     }
 
@@ -507,6 +533,7 @@ async function normalizeBankSyncTransactions(transactions, acctId) {
     ? mappingsFromString(customMappingsRaw)
     : defaultMappings;
 
+  const categoryIds = new Set((await db.getCategories()).map(c => c.id));
   const normalized = [];
   for (const trans of transactions) {
     trans.cleared = Boolean(trans.booked);
@@ -557,7 +584,7 @@ async function normalizeBankSyncTransactions(transactions, acctId) {
         account: trans.account,
         date,
         notes: importNotes && notes ? notes.trim().replace(/#/g, '##') : null,
-        category: trans.category ?? null,
+        category: categoryIds.has(trans.category) ? trans.category : null,
         imported_id,
         imported_payee: trans.imported_payee,
         cleared: trans.cleared,
@@ -582,6 +609,19 @@ async function createNewPayees(payeesToCreate, addsAndUpdates) {
   });
 }
 
+export type MatchTransactionsOptions = {
+  isBankSyncAccount?: boolean;
+  strictIdChecking?: boolean;
+  reimportDeleted?: boolean;
+  payeeNameNormalization?: PayeeNameNormalization;
+};
+
+export type ReconcileTransactionsOptions = MatchTransactionsOptions & {
+  isPreview?: boolean;
+  defaultCleared?: boolean;
+  updateDates?: boolean;
+};
+
 export type ReconcileTransactionsResult = {
   added: string[];
   updated: string[];
@@ -596,12 +636,15 @@ export type ReconcileTransactionsResult = {
 export async function reconcileTransactions(
   acctId,
   transactions,
-  isBankSyncAccount = false,
-  strictIdChecking = true,
-  isPreview = false,
-  defaultCleared = true,
-  updateDates = false,
-  reimportDeleted?: boolean,
+  {
+    isBankSyncAccount = false,
+    strictIdChecking = true,
+    isPreview = false,
+    defaultCleared = true,
+    updateDates = false,
+    reimportDeleted,
+    payeeNameNormalization,
+  }: ReconcileTransactionsOptions = {},
 ): Promise<ReconcileTransactionsResult> {
   logger.log('Performing transaction reconciliation');
 
@@ -615,13 +658,12 @@ export async function reconcileTransactions(
     transactionsStep1,
     transactionsStep2,
     transactionsStep3,
-  } = await matchTransactions(
-    acctId,
-    transactions,
+  } = await matchTransactions(acctId, transactions, {
     isBankSyncAccount,
     strictIdChecking,
     reimportDeleted,
-  );
+    payeeNameNormalization,
+  });
 
   if (isBankSyncAccount && !isPreview) {
     await classifyBankSyncTransactions(acctId, transactionsStep3);
@@ -765,9 +807,12 @@ export async function reconcileTransactions(
 export async function matchTransactions(
   acctId,
   transactions,
-  isBankSyncAccount = false,
-  strictIdChecking = true,
-  reimportDeletedOverride?: boolean,
+  {
+    isBankSyncAccount = false,
+    strictIdChecking = true,
+    reimportDeleted: reimportDeletedOverride,
+    payeeNameNormalization,
+  }: MatchTransactionsOptions = {},
 ) {
   logger.log('Performing transaction reconciliation matching');
 
@@ -782,14 +827,11 @@ export async function matchTransactions(
 
   const hasMatched = new Set();
 
-  const transactionNormalization = isBankSyncAccount
-    ? normalizeBankSyncTransactions
-    : normalizeTransactions;
-
-  const { normalized, payeesToCreate } = await transactionNormalization(
-    transactions,
-    acctId,
-  );
+  const { normalized, payeesToCreate } = isBankSyncAccount
+    ? await normalizeBankSyncTransactions(transactions, acctId)
+    : await normalizeTransactions(transactions, acctId, {
+        payeeNameNormalization,
+      });
 
   // The first pass runs the rules, and preps data for fuzzy matching
   const accounts: db.DbAccount[] = await db.getAccounts();
@@ -975,7 +1017,7 @@ export async function addTransactions(
   const { normalized, payeesToCreate } = await normalizeTransactions(
     transactions,
     acctId,
-    { rawPayeeName: true },
+    { payeeNameNormalization: 'original' },
   );
 
   const accounts: db.DbAccount[] = await db.getAccounts();
@@ -1148,15 +1190,11 @@ async function processBankSyncDownload(
         starting_balance_flag: true,
       });
 
-      const result = await reconcileTransactions(
-        id,
-        transactions,
-        true,
-        useStrictIdChecking,
-        false,
-        true,
+      const result = await reconcileTransactions(id, transactions, {
+        isBankSyncAccount: true,
+        strictIdChecking: useStrictIdChecking,
         updateDates,
-      );
+      });
       return {
         ...result,
         added: [initialId, ...result.added],
@@ -1173,11 +1211,11 @@ async function processBankSyncDownload(
     const result = await reconcileTransactions(
       id,
       importTransactions ? transactions : [],
-      true,
-      useStrictIdChecking,
-      false,
-      true,
-      updateDates,
+      {
+        isBankSyncAccount: true,
+        strictIdChecking: useStrictIdChecking,
+        updateDates,
+      },
     );
 
     if (currentBalance != null) {
@@ -1196,6 +1234,7 @@ export async function syncAccount(
   bankId: string,
   customStartingDate?: string,
   customStartingBalance?: number,
+  fileId?: string,
 ) {
   const acctRow = await db.select('accounts', id);
 
@@ -1208,7 +1247,11 @@ export async function syncAccount(
   if (acctRow.account_sync_source === 'simpleFin') {
     download = await downloadSimpleFinTransactions(acctId, syncStartDate);
   } else if (acctRow.account_sync_source === 'pluggyai') {
-    download = await downloadPluggyAiTransactions(acctId, syncStartDate);
+    download = await downloadPluggyAiTransactions(
+      acctId,
+      syncStartDate,
+      fileId,
+    );
   } else if (acctRow.account_sync_source === 'akahu') {
     download = await downloadAkahuTransactions(acctId, syncStartDate);
   } else if (acctRow.account_sync_source === 'goCardless') {

@@ -2,6 +2,7 @@ import type { Locator, Page } from '@playwright/test';
 
 import { AccountPage } from './account-page';
 import { BankSyncPage } from './bank-sync-page';
+import { BudgetPage } from './budget-page';
 import { PayeesPage } from './payees-page';
 import { ReportsPage } from './reports-page';
 import { RulesPage } from './rules-page';
@@ -84,6 +85,14 @@ export class Navigation {
     return new ReportsPage(this.page);
   }
 
+  async goToBudgetPage() {
+    await this.page.getByRole('link', { name: 'Budget', exact: true }).click();
+
+    const budgetPage = new BudgetPage(this.page);
+    await budgetPage.waitFor({ state: 'visible' });
+    return budgetPage;
+  }
+
   async goToSchedulesPage() {
     await this.page.getByRole('link', { name: 'Schedules' }).click();
 
@@ -145,14 +154,10 @@ export class Navigation {
   async createAccount(data: AccountEntry) {
     await this.page.getByRole('button', { name: 'Add account' }).click();
 
-    // Clicking "Create a local account" pushes a second modal whose
-    // heading is "Create Local Account". Wait for that heading to
-    // confirm the form is fully mounted before touching any fields.
-    await clickReactAriaButton(
-      this.page.getByRole('button', { name: 'Create a local account' }),
-    );
+    // Wait for the form heading to confirm it is fully mounted before
+    // touching any fields.
     await this.page
-      .getByRole('heading', { name: 'Create Local Account' })
+      .getByRole('heading', { name: 'Add account' })
       .waitFor({ state: 'visible' });
 
     await fillReactInput(this.page.getByLabel('Name'), data.name);
@@ -176,5 +181,15 @@ export class Navigation {
 
   async clickOnNoServer() {
     await this.page.getByRole('button', { name: 'No server' }).click();
+  }
+
+  async rightClickAccount(accountName: string) {
+    await this.page
+      .getByRole('link', { name: new RegExp(`^${accountName}`) })
+      .click({ button: 'right' });
+  }
+
+  async rightClickBudgetName() {
+    await this.page.getByTestId('budget-name').click({ button: 'right' });
   }
 }

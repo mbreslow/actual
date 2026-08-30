@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+
 import type { ComponentProps, ReactNode } from 'react';
 import { Dialog, DialogTrigger } from 'react-aria-components';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -70,15 +71,12 @@ type AccountHeaderProps = {
   accountsSyncing: string[];
   accounts: AccountEntity[];
   transactions: TransactionEntity[];
-  showBalances: boolean;
   showExtraBalances: boolean;
-  showCleared: boolean;
   showCategorizationDetails: boolean;
   showReconciled: boolean;
   showEmptyMessage: boolean;
   balanceQuery: ComponentProps<typeof ReconcilingMessage>['balanceQuery'];
   reconcileAmount?: number | null;
-  canCalculateBalance?: () => boolean;
   isFiltered: boolean;
   filteredAmount?: number | null;
   isSorted: boolean;
@@ -148,15 +146,12 @@ export function AccountHeader({
   accountsSyncing,
   accounts,
   transactions,
-  showBalances,
   showExtraBalances,
-  showCleared,
   showCategorizationDetails,
   showReconciled,
   showEmptyMessage,
   balanceQuery,
   reconcileAmount,
-  canCalculateBalance,
   isFiltered,
   filteredAmount,
   isSorted,
@@ -554,12 +549,7 @@ export function AccountHeader({
                       account={account}
                       canSync={canSync}
                       showNetWorthChart={showNetWorthChart}
-                      canShowBalances={
-                        canCalculateBalance ? canCalculateBalance() : false
-                      }
                       isSorted={isSorted}
-                      showBalances={showBalances}
-                      showCleared={showCleared}
                       showCategorizationDetails={showCategorizationDetails}
                       showReconciled={showReconciled}
                       onMenuSelect={onMenuSelect}
@@ -599,6 +589,10 @@ export function AccountHeader({
                           text: showNetWorthChart
                             ? t('Hide balance chart')
                             : t('Show balance chart'),
+                        },
+                        {
+                          name: 'manage-columns',
+                          text: t('Manage table columns'),
                         },
                       ]}
                     />
@@ -773,9 +767,6 @@ type AccountMenuProps = {
   account: AccountEntity;
   canSync: boolean;
   showNetWorthChart: boolean;
-  showBalances: boolean;
-  canShowBalances: boolean;
-  showCleared: boolean;
   showCategorizationDetails: boolean;
   showReconciled: boolean;
   isSorted: boolean;
@@ -786,12 +777,11 @@ type AccountMenuProps = {
       | 'close'
       | 'reopen'
       | 'export'
-      | 'toggle-balance'
       | 'toggle-categorization-details'
       | 'remove-sorting'
-      | 'toggle-cleared'
       | 'toggle-reconciled'
-      | 'toggle-net-worth-chart',
+      | 'toggle-net-worth-chart'
+      | 'manage-columns',
   ) => void;
 };
 
@@ -799,9 +789,6 @@ function AccountMenu({
   account,
   canSync,
   showNetWorthChart,
-  showBalances,
-  canShowBalances,
-  showCleared,
   showCategorizationDetails,
   showReconciled,
   isSorted,
@@ -825,16 +812,6 @@ function AccountMenu({
               } as const,
             ]
           : []),
-        ...(canShowBalances
-          ? [
-              {
-                name: 'toggle-balance',
-                text: showBalances
-                  ? t('Hide running balance')
-                  : t('Show running balance'),
-              } as const,
-            ]
-          : []),
         {
           name: 'toggle-net-worth-chart',
           text: showNetWorthChart
@@ -842,10 +819,8 @@ function AccountMenu({
             : t('Show balance chart'),
         },
         {
-          name: 'toggle-cleared',
-          text: showCleared
-            ? t('Hide "cleared" checkboxes')
-            : t('Show "cleared" checkboxes'),
+          name: 'manage-columns',
+          text: t('Manage table columns'),
         },
         {
           name: 'toggle-categorization-details',

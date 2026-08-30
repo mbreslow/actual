@@ -1,13 +1,21 @@
 import MockDate from 'mockdate';
 
-import type { ScheduleEntity } from '#types/models';
+import type { RuleConditionEntity, ScheduleEntity } from '#types/models';
 
 import * as monthUtils from './months';
 import {
   computeSchedulePreviewTransactions,
+  getHasTransactionsQuery,
   getNextDate,
+  getScheduleOccurrenceMatchStartDate,
   getStatus,
   getUpcomingDays,
+  indexPostedScheduleTransactions,
+  isCustomUpcomingLength,
+  isScheduleOccurrencePosted,
+  UPCOMING_LENGTH_PRESET_LABELS,
+  UPCOMING_LENGTH_PRESET_OPTIONS,
+  UPCOMING_LENGTH_PRESET_VALUES,
 } from './schedules';
 import type { ScheduleStatuses } from './schedules';
 
@@ -266,6 +274,195 @@ describe('schedules', () => {
     });
   });
 
+  describe('getHasTransactionsQuery', () => {
+    it('matches nothing when there are no schedules', () => {
+      // An empty `$or` compiles away to no constraint at all, which would make
+      // this scan every transaction in the budget. It must never do that.
+      const filters = getHasTransactionsQuery([]).serialize().filterExpressions;
+
+      expect(filters).toEqual([{ id: null }]);
+      expect(filters[0]).not.toHaveProperty('$or');
+    });
+
+    it('filters by schedule and date when schedules are given', () => {
+      const filters = getHasTransactionsQuery([
+        {
+          id: 'schedule-1',
+          next_date: '2024-03-10',
+          _conditions: [{ op: 'is', field: 'date', value: '2024-03-10' }],
+        },
+      ]).serialize().filterExpressions;
+
+      expect(filters).toEqual([
+        {
+          $or: [
+            { $and: { schedule: 'schedule-1', date: { $gte: '2024-03-10' } } },
+          ],
+        },
+      ]);
+    });
+  });
+
+  describe('getScheduleOccurrenceMatchStartDate', () => {
+    const occurrenceDate = '2024-03-10';
+
+    it('uses exact date for one-time schedules', () => {
+      expect(
+        getScheduleOccurrenceMatchStartDate(
+          {
+            _conditions: [{ op: 'is', field: 'date', value: occurrenceDate }],
+          },
+          occurrenceDate,
+        ),
+      ).toBe(occurrenceDate);
+    });
+
+    it('uses exact date for auto-posted recurring schedules', () => {
+      expect(
+        getScheduleOccurrenceMatchStartDate(
+          { posts_transaction: true },
+          occurrenceDate,
+        ),
+      ).toBe(occurrenceDate);
+    });
+
+    it('uses a 2-day lookback for manual recurring schedules', () => {
+      expect(
+        getScheduleOccurrenceMatchStartDate(
+          { posts_transaction: false },
+          occurrenceDate,
+        ),
+      ).toBe('2024-03-08');
+    });
+
+    it('uses exact date for recurring schedules with op is', () => {
+      expect(
+        getScheduleOccurrenceMatchStartDate(
+          {
+            posts_transaction: false,
+            _conditions: [
+              {
+                op: 'is',
+                field: 'date',
+                value: { start: occurrenceDate, frequency: 'monthly' },
+              },
+            ],
+          },
+          occurrenceDate,
+        ),
+      ).toBe(occurrenceDate);
+    });
+
+    it('uses exact date for daily recurring schedules with op is', () => {
+      expect(
+        getScheduleOccurrenceMatchStartDate(
+          {
+            posts_transaction: false,
+            _conditions: [
+              {
+                op: 'is',
+                field: 'date',
+                value: { start: occurrenceDate, frequency: 'daily' },
+              },
+            ],
+          },
+          occurrenceDate,
+        ),
+      ).toBe(occurrenceDate);
+    });
+  });
+
+  describe('indexPostedScheduleTransactions', () => {
+    it('groups schedule-linked transactions by schedule id', () => {
+      const indexed = indexPostedScheduleTransactions([
+        { schedule: 'sched-1', date: '2024-03-09' },
+        { schedule: 'sched-2', date: '2024-03-10' },
+        { schedule: 'sched-1', date: '2024-04-10' },
+        { date: '2024-03-11' },
+      ]);
+
+      expect(indexed.get('sched-1')).toEqual([
+        { schedule: 'sched-1', date: '2024-03-09' },
+        { schedule: 'sched-1', date: '2024-04-10' },
+      ]);
+      expect(indexed.get('sched-2')).toEqual([
+        { schedule: 'sched-2', date: '2024-03-10' },
+      ]);
+      expect(indexed.has('missing')).toBe(false);
+    });
+  });
+
+  describe('isScheduleOccurrencePosted', () => {
+    const scheduleId = 'sched-1';
+    const occurrenceDate = '2024-03-10';
+    const manualRecurringSchedule = { posts_transaction: false };
+    const autoPostSchedule = { posts_transaction: true };
+    const oneTimeSchedule = {
+      _conditions: [
+        { op: 'is', field: 'date', value: occurrenceDate } as const,
+      ],
+    };
+    const manualRecurringWithIsOp = {
+      posts_transaction: false,
+      _conditions: [
+        {
+          op: 'is',
+          field: 'date',
+          value: { start: occurrenceDate, frequency: 'monthly' },
+        },
+      ] satisfies RuleConditionEntity[],
+    };
+
+    function expectPosted(
+      schedule: Parameters<typeof getScheduleOccurrenceMatchStartDate>[0],
+      txDate: string,
+      expected: boolean,
+    ) {
+      expect(
+        isScheduleOccurrencePosted({
+          schedule,
+          scheduleId,
+          occurrenceDate,
+          postedTransactions: [{ schedule: scheduleId, date: txDate }],
+        }),
+      ).toBe(expected);
+    }
+
+    it.each([
+      [
+        'same-day manual recurring',
+        manualRecurringSchedule,
+        occurrenceDate,
+        true,
+      ],
+      [
+        'early pay day before due for recurring date cond',
+        manualRecurringWithIsOp,
+        '2024-03-09',
+        false,
+      ],
+      ['early pay within 2 days', manualRecurringSchedule, '2024-03-09', true],
+      [
+        'early pay outside window',
+        manualRecurringSchedule,
+        '2024-03-07',
+        false,
+      ],
+      ['auto-post day before due', autoPostSchedule, '2024-03-09', false],
+      ['auto-post on due date', autoPostSchedule, occurrenceDate, true],
+      ['one-time on due date', oneTimeSchedule, occurrenceDate, true],
+      ['one-time day before due', oneTimeSchedule, '2024-03-09', false],
+      [
+        'later month tx does not satisfy earlier occurrence',
+        manualRecurringSchedule,
+        '2024-04-10',
+        false,
+      ],
+    ] as const)('%s', (_label, schedule, txDate, expected) => {
+      expectPosted(schedule, txDate, expected);
+    });
+  });
+
   describe('getNextDate', () => {
     it('returns last occurrence for a recurring schedule with an end date in the past', () => {
       const dateCond = {
@@ -298,6 +495,35 @@ describe('schedules', () => {
 
       const result = getNextDate(dateCond, new Date(2017, 0, 1));
       expect(result).toBeNull();
+    });
+  });
+
+  describe('shared presets', () => {
+    it('preset values and options align', () => {
+      const valuesFromOptions = UPCOMING_LENGTH_PRESET_OPTIONS.map(
+        o => o.value,
+      );
+      expect(valuesFromOptions).toEqual(
+        UPCOMING_LENGTH_PRESET_VALUES as readonly string[],
+      );
+    });
+
+    it('every preset has a label entry', () => {
+      for (const v of UPCOMING_LENGTH_PRESET_VALUES) {
+        expect(UPCOMING_LENGTH_PRESET_LABELS[v]).toBeDefined();
+        expect(typeof UPCOMING_LENGTH_PRESET_LABELS[v]).toBe('string');
+      }
+    });
+
+    it('isCustomUpcomingLength recognizes presets and custom values', () => {
+      for (const v of UPCOMING_LENGTH_PRESET_VALUES) {
+        expect(isCustomUpcomingLength(v)).toBe(false);
+      }
+
+      expect(isCustomUpcomingLength('1-day')).toBe(true);
+      expect(isCustomUpcomingLength('2-week')).toBe(true);
+      expect(isCustomUpcomingLength(null)).toBe(false);
+      expect(isCustomUpcomingLength(undefined)).toBe(false);
     });
   });
 });

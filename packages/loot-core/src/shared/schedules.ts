@@ -3,16 +3,57 @@ import type { IRuleOptions } from '@rschedule/core';
 import * as d from 'date-fns';
 
 import { Condition } from '#server/rules';
-import type { ScheduleEntity } from '#types/models';
+import type { RuleConditionEntity, ScheduleEntity } from '#types/models';
 
 import * as monthUtils from './months';
 import { q } from './query';
+
+export const DEFAULT_UPCOMING_SCHEDULE_DAYS = '7';
+
+// Preset token values used by UI selects. Keep labels in the UI (i18n) but
+// centralize the canonical preset tokens so all components share the same set.
+export const UPCOMING_LENGTH_PRESET_VALUES = [
+  '1',
+  '7',
+  '14',
+  'oneMonth',
+  'currentMonth',
+] as const;
+
+export type UpcomingLengthPresetValue =
+  (typeof UPCOMING_LENGTH_PRESET_VALUES)[number];
+
+export const UPCOMING_LENGTH_PRESET_LABELS: Record<
+  UpcomingLengthPresetValue,
+  string
+> = {
+  '1': '1 day',
+  '7': '1 week',
+  '14': '2 weeks',
+  oneMonth: '1 month',
+  currentMonth: 'End of the current month',
+};
+
+export const UPCOMING_LENGTH_PRESET_OPTIONS: {
+  value: UpcomingLengthPresetValue;
+  labelKey: string;
+}[] = UPCOMING_LENGTH_PRESET_VALUES.map(v => ({
+  value: v,
+  labelKey: UPCOMING_LENGTH_PRESET_LABELS[v],
+}));
+
+export function isCustomUpcomingLength(value: string | null | undefined) {
+  if (value == null) return false;
+  return (
+    (UPCOMING_LENGTH_PRESET_VALUES as readonly string[]).indexOf(value) === -1
+  );
+}
 
 export function getStatus(
   nextDate: string,
   completed: boolean,
   hasTrans: boolean,
-  upcomingLength: string = '7',
+  upcomingLength: string = DEFAULT_UPCOMING_SCHEDULE_DAYS,
 ) {
   const upcomingDays = getUpcomingDays(upcomingLength);
   const today = monthUtils.currentDay();
@@ -34,39 +75,121 @@ export function getStatus(
   }
 }
 
+export type ScheduleOccurrenceMatchInput = {
+  posts_transaction?: boolean;
+  _conditions?: RuleConditionEntity[];
+};
+
+/**
+ * Lower bound for matching a posted transaction to a schedule occurrence date.
+ *
+ * Used by getHasTransactionsQuery for `next_date` (lower bound only). Forecast
+ * occurrence dedup also applies an upper bound of `occurrenceDate`; see
+ * isScheduleOccurrencePosted.
+ */
+export function getScheduleOccurrenceMatchStartDate(
+  schedule: ScheduleOccurrenceMatchInput,
+  occurrenceDate: string,
+): string {
+  const dateCond = schedule._conditions?.find(c => c.field === 'date');
+  if (dateCond?.op === 'is') {
+    return occurrenceDate;
+  }
+  if (schedule.posts_transaction) {
+    return occurrenceDate;
+  }
+  return monthUtils.subDays(occurrenceDate, 2);
+}
+
+export type PostedScheduleTransaction = {
+  schedule?: string | null;
+  date: string;
+};
+
+export function indexPostedScheduleTransactions(
+  transactions: PostedScheduleTransaction[],
+): Map<string, PostedScheduleTransaction[]> {
+  const byScheduleId = new Map<string, PostedScheduleTransaction[]>();
+
+  for (const transaction of transactions) {
+    if (!transaction.schedule) {
+      continue;
+    }
+
+    const existing = byScheduleId.get(transaction.schedule);
+    if (existing) {
+      existing.push(transaction);
+    } else {
+      byScheduleId.set(transaction.schedule, [transaction]);
+    }
+  }
+
+  return byScheduleId;
+}
+
+export function isScheduleOccurrencePosted({
+  schedule,
+  scheduleId,
+  occurrenceDate,
+  postedTransactions,
+}: {
+  schedule: ScheduleOccurrenceMatchInput;
+  scheduleId: string;
+  occurrenceDate: string;
+  postedTransactions: PostedScheduleTransaction[];
+}): boolean {
+  const matchStartDate = getScheduleOccurrenceMatchStartDate(
+    schedule,
+    occurrenceDate,
+  );
+
+  return postedTransactions.some(
+    tx =>
+      tx.schedule === scheduleId &&
+      tx.date >= matchStartDate &&
+      tx.date <= occurrenceDate,
+  );
+}
+
 /**
  * Builds a query to check if each schedule already has a matching transaction.
  *
  * The date lower-bound varies:
- * - `dateCond.op === 'is'` (one-time): exact `next_date`, no lookback.
+ * - `dateCond.op === 'is'` (one-time or recurring): exact `next_date`, no lookback.
  * - `posts_transaction` (auto-posted recurring): exact `next_date`, since
  *   auto-posted dates are always precise. A lookback here would cause
  *   yesterday's transaction to falsely match today's occurrence.
- * - Otherwise (manual recurring): 2-day lookback to catch early payments.
+ * - Otherwise (manual recurring with `isapprox`, etc.): 2-day lookback to catch
+ *   early payments.
  */
 export function getHasTransactionsQuery(schedules) {
   const filters = schedules.map(schedule => {
-    const dateCond = schedule._conditions?.find(c => c.field === 'date');
     return {
       $and: {
         schedule: schedule.id,
         date: {
-          $gte:
-            dateCond && dateCond.op === 'is'
-              ? schedule.next_date
-              : schedule.posts_transaction
-                ? schedule.next_date
-                : monthUtils.subDays(schedule.next_date, 2),
+          $gte: getScheduleOccurrenceMatchStartDate(
+            schedule,
+            schedule.next_date,
+          ),
         },
       },
     };
   });
 
-  return q('transactions')
+  const query = q('transactions')
     .options({ splits: 'all' })
-    .filter({ $or: filters })
     .orderBy({ date: 'desc' })
     .select(['schedule', 'date']);
+
+  // An empty `$or` compiles away to no constraint at all (`WHERE 1`), which
+  // would scan every transaction in the budget to answer a question about zero
+  // schedules. Match nothing instead — `id` is a primary key and never null.
+  if (filters.length === 0) {
+    return query.filter({ id: null });
+  }
+
+  return query.filter({ $or: filters });
 }
 
 type ScheduleRuleOptions = IRuleOptions & {
@@ -224,7 +347,7 @@ export function getScheduledAmount(
 }
 
 export function getUpcomingDays(
-  upcomingLength = '7',
+  upcomingLength = DEFAULT_UPCOMING_SCHEDULE_DAYS,
   today = monthUtils.currentDay(), // for testability
 ): number {
   const month = monthUtils.getMonth(today);
