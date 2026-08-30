@@ -15,3 +15,28 @@ services:
     volumes:
       - '.:/app'
     restart: 'no'
+
+  actual-daily-sync-worker:
+    profiles: ['daily-sync-worker']
+    build:
+      context: .
+      dockerfile: daily-sync-worker.Dockerfile
+    image: actual-daily-sync-worker
+    environment:
+      ACTUAL_SERVER_URL: ${ACTUAL_SERVER_URL}
+      ACTUAL_SERVER_URL_FILE: ${ACTUAL_SERVER_URL_FILE:-}
+      ACTUAL_PASSWORD: ${ACTUAL_PASSWORD:-}
+      ACTUAL_PASSWORD_FILE: ${ACTUAL_PASSWORD_FILE:-}
+      ACTUAL_SESSION_TOKEN: ${ACTUAL_SESSION_TOKEN:-}
+      ACTUAL_SESSION_TOKEN_FILE: ${ACTUAL_SESSION_TOKEN_FILE:-}
+      ACTUAL_SYNC_ID: ${ACTUAL_SYNC_ID}
+      ACTUAL_SYNC_ID_FILE: ${ACTUAL_SYNC_ID_FILE:-}
+      ACTUAL_ENCRYPTION_PASSWORD: ${ACTUAL_ENCRYPTION_PASSWORD:-}
+      ACTUAL_ENCRYPTION_PASSWORD_FILE: ${ACTUAL_ENCRYPTION_PASSWORD_FILE:-}
+      ACTUAL_LLM_CLASSIFICATION_CONFIG_FILE: ${ACTUAL_LLM_CLASSIFICATION_CONFIG_FILE:-}
+      ACTUAL_DAILY_SYNC_TIME: ${ACTUAL_DAILY_SYNC_TIME:-06:00}
+      ACTUAL_DAILY_SYNC_TIMEZONE: ${ACTUAL_DAILY_SYNC_TIMEZONE:-America/New_York}
+      RUN_ON_START: ${RUN_ON_START:-true}
+    tmpfs:
+      - /data:uid=1001,gid=1001,mode=0700
+    restart: unless-stopped

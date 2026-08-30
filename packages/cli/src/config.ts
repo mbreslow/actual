@@ -1,3 +1,4 @@
+import { readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
@@ -143,6 +144,17 @@ function validateNonNegativeInt(value: number, name: string): number {
   return value;
 }
 
+function readSecretFileEnv(name: string): string | undefined {
+  const filePath = process.env[`${name}_FILE`];
+  if (!filePath) return undefined;
+  return readFileSync(filePath, 'utf-8').trimEnd();
+}
+
+function readStringEnv(name: string): string | undefined {
+  const value = process.env[name];
+  return value === '' ? undefined : value;
+}
+
 export async function resolveConfig(
   cliOpts: CliGlobalOpts,
 ): Promise<CliConfig> {
@@ -150,30 +162,39 @@ export async function resolveConfig(
 
   const serverUrl =
     cliOpts.serverUrl ??
-    process.env.ACTUAL_SERVER_URL ??
+    readStringEnv('ACTUAL_SERVER_URL') ??
+    readSecretFileEnv('ACTUAL_SERVER_URL') ??
     fileConfig.serverUrl ??
     '';
 
   const password =
-    cliOpts.password ?? process.env.ACTUAL_PASSWORD ?? fileConfig.password;
+    cliOpts.password ??
+    readStringEnv('ACTUAL_PASSWORD') ??
+    readSecretFileEnv('ACTUAL_PASSWORD') ??
+    fileConfig.password;
 
   const sessionToken =
     cliOpts.sessionToken ??
-    process.env.ACTUAL_SESSION_TOKEN ??
+    readStringEnv('ACTUAL_SESSION_TOKEN') ??
+    readSecretFileEnv('ACTUAL_SESSION_TOKEN') ??
     fileConfig.sessionToken;
 
   const syncId =
-    cliOpts.syncId ?? process.env.ACTUAL_SYNC_ID ?? fileConfig.syncId;
+    cliOpts.syncId ??
+    readStringEnv('ACTUAL_SYNC_ID') ??
+    readSecretFileEnv('ACTUAL_SYNC_ID') ??
+    fileConfig.syncId;
 
   const dataDir =
     cliOpts.dataDir ??
-    process.env.ACTUAL_DATA_DIR ??
+    readStringEnv('ACTUAL_DATA_DIR') ??
     fileConfig.dataDir ??
     join(homedir(), '.actual-cli', 'data');
 
   const encryptionPassword =
     cliOpts.encryptionPassword ??
-    process.env.ACTUAL_ENCRYPTION_PASSWORD ??
+    readStringEnv('ACTUAL_ENCRYPTION_PASSWORD') ??
+    readSecretFileEnv('ACTUAL_ENCRYPTION_PASSWORD') ??
     fileConfig.encryptionPassword;
 
   if (!serverUrl) {

@@ -822,7 +822,7 @@ export async function classifyBankSyncTransactions(
           ? payeeNames.get(candidate.trans.payee) || ''
           : '',
       })),
-      config,
+      { ...config, batchSize: 1 },
       categories,
     );
     const updatesByTransaction = new Map(

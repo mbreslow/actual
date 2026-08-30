@@ -253,6 +253,7 @@ function LLMClassificationSettings() {
   const [savedConfig, setSavedConfig] = useGlobalPref(
     'llmClassificationConfig',
   );
+  const hasLoadedGlobalPrefs = useSelector(state => state.prefs.global != null);
   const [config, setConfig] =
     useState<LLMClassificationConfig>(defaultLLMConfig);
   const [fetchedModels, setFetchedModels] = useState<string[]>([]);
@@ -310,6 +311,10 @@ function LLMClassificationSettings() {
   }, [config.apiKey]);
 
   useEffect(() => {
+    if (!hasLoadedGlobalPrefs) {
+      return;
+    }
+
     let active = true;
     const provider = config.provider || 'ollama';
     const isFetchable = ['ollama', 'openai', 'anthropic', 'google'].includes(
@@ -359,7 +364,7 @@ function LLMClassificationSettings() {
     return () => {
       active = false;
     };
-  }, [config.provider, debouncedApiKey, config.endpoint]);
+  }, [hasLoadedGlobalPrefs, config.provider, debouncedApiKey, config.endpoint]);
 
   const saveConfig = () => {
     setSavedConfig({

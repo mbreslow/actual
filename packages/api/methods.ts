@@ -17,8 +17,10 @@ import type {
   RuleEntity,
   TransactionEntity,
 } from '@actual-app/core/types/models';
+import type { GlobalPrefs } from '@actual-app/core/types/prefs';
 
 export { q } from './app/query';
+export type { LLMClassificationConfig } from '@actual-app/core/types/prefs';
 
 function send<K extends keyof Handlers, T extends Handlers[K]>(
   name: K,
@@ -64,6 +66,10 @@ export async function runBankSync(args?: {
   accountId: APIAccountEntity['id'];
 }) {
   return send('api/bank-sync', args);
+}
+
+export async function saveGlobalPrefs(prefs: GlobalPrefs) {
+  return send('save-global-prefs', prefs);
 }
 
 export async function batchBudgetUpdates(func: () => Promise<void>) {

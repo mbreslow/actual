@@ -42,6 +42,31 @@ function getAllTransactions() {
   );
 }
 
+function getOllamaUserPrompt(body: BodyInit | null | undefined): string {
+  if (typeof body !== 'string') {
+    throw new Error('Expected a JSON request body');
+  }
+  const request: unknown = JSON.parse(body);
+  if (
+    typeof request !== 'object' ||
+    request === null ||
+    !('messages' in request) ||
+    !Array.isArray(request.messages)
+  ) {
+    throw new Error('Expected an Ollama messages array');
+  }
+  const userMessage: unknown = request.messages[1];
+  if (
+    typeof userMessage !== 'object' ||
+    userMessage === null ||
+    !('content' in userMessage) ||
+    typeof userMessage.content !== 'string'
+  ) {
+    throw new Error('Expected an Ollama user prompt');
+  }
+  return userMessage.content;
+}
+
 async function prepareDatabase() {
   await db.insertCategoryGroup({ id: 'group1', name: 'group1', is_income: 1 });
   await db.insertCategory({
@@ -225,6 +250,82 @@ describe('Account sync', () => {
       transactions.find(t => t.imported_id === 'already-categorized')?.category,
     ).toBe(travel);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockRestore();
+  });
+
+  test('bank sync LLM categorizes transactions one at a time', async () => {
+    const { id: acctId } = await prepareDatabase();
+    await db.insertCategoryGroup({
+      id: 'expenses',
+      name: 'Expenses',
+      is_income: 0,
+    });
+    const groceries = await db.insertCategory({
+      id: 'groceries',
+      name: 'Groceries',
+      cat_group: 'expenses',
+      is_income: 0,
+    });
+
+    await db.update('preferences', {
+      id: `sync-llm-classify-${acctId}` satisfies keyof SyncedPrefs,
+      value: 'true',
+    });
+    await db.update('preferences', {
+      id: 'llmClassificationEnabled' satisfies keyof SyncedPrefs,
+      value: 'true',
+    });
+    vi.mocked(asyncStorage.getItem).mockResolvedValue({
+      provider: 'ollama',
+      model: 'test-model',
+      batchSize: 12,
+    });
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          message: {
+            content: JSON.stringify({
+              classifications: [
+                {
+                  id: 1,
+                  categoryId: groceries,
+                  confidence: 0.99,
+                  reason: 'Grocery merchant',
+                },
+              ],
+            }),
+          },
+        }),
+      ),
+    );
+
+    await reconcileTransactions(
+      acctId,
+      [
+        {
+          date: '2020-01-02',
+          payeeName: 'Kroger',
+          transactionAmount: { amount: '-12.34' },
+          transactionId: 'llm-first',
+          booked: true,
+        },
+        {
+          date: '2020-01-03',
+          payeeName: 'Market',
+          transactionAmount: { amount: '-23.45' },
+          transactionId: 'llm-second',
+          booked: true,
+        },
+      ],
+      true,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const call of fetchMock.mock.calls) {
+      const prompt = getOllamaUserPrompt(call[1]?.body);
+      expect(prompt.match(/"id":/g)).toHaveLength(1);
+    }
     fetchMock.mockRestore();
   });
 
